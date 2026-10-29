@@ -1,52 +1,40 @@
 import { useEffect, useState } from "react";
 import { Chip } from "@mui/material";
 
-function Temporizador({ onActualizar }) {
-  const [tiempoRestante, setTiempoRestante] = useState(600);
-
-  const formatearTiempo = (segundos) => {
-    const mins = Math.floor(segundos / 60);
-    const segs = segundos % 60;
-    return `${mins}:${segs.toString().padStart(2, '0')}`;
-  };
+/**
+ * Cuenta atras hasta la siguiente recarga.
+ *
+ * Es solo visual. Antes este componente tambien disparaba la recarga por su
+ * cuenta mientras App.jsx tenia su propio setInterval, asi que cada 10 minutos
+ * se pedian los datos dos veces. Ahora el unico temporizador que recarga vive
+ * en App.jsx y este se limita a mostrar lo que falta.
+ */
+function Temporizador({ ultimaCarga, intervaloMs = 600000 }) {
+  const [restante, setRestante] = useState(() =>
+    Math.max(0, Math.ceil((ultimaCarga + intervaloMs - Date.now()) / 1000))
+  );
 
   useEffect(() => {
-    const calcularTiempoRestante = () => {
-      let ultimaActualizacion = localStorage.getItem("ultimaActualizacion");
-      
-      if (!ultimaActualizacion) {
-        ultimaActualizacion = Date.now().toString();
-        localStorage.setItem("ultimaActualizacion", ultimaActualizacion);
-      }
+    const tic = () =>
+      setRestante(
+        Math.max(0, Math.ceil((ultimaCarga + intervaloMs - Date.now()) / 1000))
+      );
 
-      const ahora = Date.now();
-      const ultima = parseInt(ultimaActualizacion, 10);
-      const tiempoTranscurrido = (ahora - ultima) / 1000;
-      const restante = Math.max(0, 600 - tiempoTranscurrido);
-      
-      setTiempoRestante(Math.floor(restante));
+    tic();
+    const temporizador = setInterval(tic, 1000);
+    return () => clearInterval(temporizador);
+  }, [ultimaCarga, intervaloMs]);
 
-      if (restante <= 0 && onActualizar) {
-        onActualizar();
-        const nuevoTimestamp = Date.now();
-        localStorage.setItem("ultimaActualizacion", nuevoTimestamp.toString());
-        setTiempoRestante(600);
-      }
-    };
-
-    calcularTiempoRestante();
-    const timer = setInterval(calcularTiempoRestante, 1000);
-
-    return () => clearInterval(timer);
-  }, [onActualizar]);
+  const minutos = Math.floor(restante / 60);
+  const segundos = String(restante % 60).padStart(2, "0");
 
   return (
-    <Chip 
-      label={`⏱️ ${formatearTiempo(tiempoRestante)}`}
-      color="info"
+    <Chip
       size="small"
       variant="outlined"
-      sx={{ minWidth: 70 }}
+      label={`${minutos}:${segundos}`}
+      title="Tiempo hasta la siguiente actualización automática"
+      sx={{ minWidth: 64, fontVariantNumeric: "tabular-nums" }}
     />
   );
 }

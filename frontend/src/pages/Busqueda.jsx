@@ -1,125 +1,237 @@
 import { useState } from "react";
-import axios from "axios";
 import {
+  Alert,
   Box,
+  Button,
   Card,
   CardContent,
-  Typography,
-  TextField,
-  Button,
+  Chip,
+  CircularProgress,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  IconButton,
   Table,
   TableBody,
   TableCell,
-  TableContainer,
   TableHead,
   TableRow,
-  Paper,
-  CircularProgress,
-  Chip
+  TextField,
+  Typography,
+  useMediaQuery,
+  useTheme,
 } from "@mui/material";
+import CloseIcon from "@mui/icons-material/Close";
+import SearchIcon from "@mui/icons-material/Search";
 
-const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://127.0.0.1:8000" : "");
+import { ENDPOINTS, api, mensajeDeError } from "../api";
+import { VIZ } from "../tema";
 
 function Busqueda() {
-  const [busqueda, setBusqueda] = useState("");
-  const [resultados, setResultados] = useState([]);
-  const [cargando, setCargando] = useState(false);
+  const theme = useTheme();
+  const esMovil = useMediaQuery(theme.breakpoints.down("sm"));
+  const v = VIZ[theme.palette.mode];
 
-  const buscarUnidades = async () => {
-    if (!busqueda.trim()) return;
-    
+  const [texto, setTexto] = useState("");
+  const [resultados, setResultados] = useState(null);
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState(null);
+
+  const [historial, setHistorial] = useState(null);
+  const [cargandoHistorial, setCargandoHistorial] = useState(false);
+
+  const buscar = async () => {
+    const aguja = texto.trim();
+    if (aguja.length < 3) {
+      setError("Escribe al menos 3 caracteres del chasis.");
+      return;
+    }
+
     setCargando(true);
+    setError(null);
     try {
-      const response = await axios.get(`${API_URL}/api/unidades/buscar?texto=${busqueda}`);
-      setResultados(response.data.resultados || []);
-    } catch (error) {
-      console.error("Error buscando unidades:", error);
+      // params en lugar de interpolar la cadena: axios se encarga de escapar
+      // los caracteres especiales del chasis.
+      const { data } = await api.get(ENDPOINTS.buscar, { params: { texto: aguja } });
+      setResultados(data);
+    } catch (e) {
+      setError(mensajeDeError(e));
+      setResultados(null);
     } finally {
       setCargando(false);
     }
   };
 
+  const verHistorial = async (chasis) => {
+    setCargandoHistorial(true);
+    setHistorial({ chasis, movimientos: [] });
+    try {
+      const { data } = await api.get(ENDPOINTS.historial(chasis));
+      setHistorial(data);
+    } catch (e) {
+      setError(mensajeDeError(e));
+      setHistorial(null);
+    } finally {
+      setCargandoHistorial(false);
+    }
+  };
+
+  const columnas = esMovil
+    ? ["Chasis", "Chofer", "Ubicación", "Fecha"]
+    : ["Chasis", "Chofer", "Ubicación", "Isla", "Marca", "Estado", "Fecha"];
+
   return (
-    <Box sx={{ mt: 3 }}>
+    <>
       <Card>
         <CardContent>
-          <Typography variant="h5" gutterBottom>
-            🔍 Buscar Unidades
+          <Typography variant="h5" sx={{ mb: 0.5 }}>
+            Buscar unidad
           </Typography>
-          
-          <Box sx={{ display: "flex", gap: 2, mb: 3, flexWrap: "wrap" }}>
+          <Typography sx={{ color: v.tintaSecundaria, fontSize: "0.8rem", mb: 2 }}>
+            Escribe el chasis completo o una parte. Se muestra el último
+            movimiento de cada unidad; toca una fila para ver su historial.
+          </Typography>
+
+          <Box sx={{ display: "flex", gap: 1, mb: 2 }}>
             <TextField
-              label="Ingrese chasis o parte del chasis"
-              value={busqueda}
-              onChange={(e) => setBusqueda(e.target.value)}
               fullWidth
               size="small"
-              onKeyDown={(e) => e.key === "Enter" && buscarUnidades()}
+              label="Chasis o parte del chasis"
+              value={texto}
+              onChange={(e) => setTexto(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && buscar()}
             />
-            <Button 
-              variant="contained" 
-              onClick={buscarUnidades}
-              disabled={cargando || !busqueda.trim()}
-              sx={{ minWidth: 120 }}
+            <Button
+              variant="contained"
+              onClick={buscar}
+              disabled={cargando || texto.trim().length < 3}
+              startIcon={cargando ? null : <SearchIcon />}
+              sx={{ minWidth: 112, flexShrink: 0 }}
             >
-              {cargando ? <CircularProgress size={24} /> : "🔍 Buscar"}
+              {cargando ? <CircularProgress size={20} color="inherit" /> : "Buscar"}
             </Button>
           </Box>
 
-          {resultados.length > 0 ? (
-            <TableContainer component={Paper} sx={{ maxHeight: 400 }}>
-              <Table stickyHeader>
-                <TableHead>
-                  <TableRow>
-                    <TableCell><strong>Chasis</strong></TableCell>
-                    <TableCell><strong>Chofer</strong></TableCell>
-                    <TableCell><strong>Origen</strong></TableCell>
-                    <TableCell><strong>Destino</strong></TableCell>
-                    <TableCell><strong>Fecha</strong></TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {resultados.map((unidad, index) => (
-                    <TableRow key={index}>
-                      <TableCell>
-                        <Chip 
-                          label={unidad.chasis}
-                          color="primary"
-                          size="small"
-                          variant="outlined"
-                        />
-                      </TableCell>
-                      <TableCell>{unidad.chofer}</TableCell>
-                      <TableCell>
-                        <Chip 
-                          label={unidad.origen}
-                          color="info"
-                          size="small"
-                          variant="outlined"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Chip 
-                          label={unidad.destino}
-                          color="success"
-                          size="small"
-                          variant="outlined"
-                        />
-                      </TableCell>
-                      <TableCell>{unidad.fecha}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          ) : busqueda && !cargando ? (
-            <Typography align="center" color="textSecondary">
-              No se encontraron unidades con "{busqueda}"
+          {error && (
+            <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setError(null)}>
+              {error}
+            </Alert>
+          )}
+
+          {resultados && resultados.total === 0 && (
+            <Typography sx={{ py: 3, textAlign: "center", color: v.tintaSuave }}>
+              No se encontró ninguna unidad con «{texto.trim()}»
             </Typography>
-          ) : null}
+          )}
+
+          {resultados && resultados.total > 0 && (
+            <>
+              <Typography sx={{ mb: 1, fontSize: "0.8rem", color: v.tintaSecundaria }}>
+                {resultados.total} {resultados.total === 1 ? "unidad" : "unidades"}
+                {resultados.truncado &&
+                  ` · mostrando las ${resultados.resultados.length} más recientes`}
+              </Typography>
+
+              <Box sx={{ overflowX: "auto" }}>
+                <Table size="small" sx={{ minWidth: esMovil ? 480 : 720 }}>
+                  <TableHead>
+                    <TableRow>
+                      {columnas.map((c) => (
+                        <TableCell key={c}>{c}</TableCell>
+                      ))}
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {resultados.resultados.map((u) => (
+                      <TableRow
+                        key={u.chasis}
+                        hover
+                        onClick={() => verHistorial(u.chasis)}
+                        sx={{ cursor: "pointer" }}
+                      >
+                        <TableCell sx={{ fontWeight: 600, whiteSpace: "nowrap" }}>
+                          {u.chasis}
+                        </TableCell>
+                        <TableCell>{u.chofer}</TableCell>
+                        <TableCell>
+                          <Chip label={u.ubicacion} size="small" variant="outlined" />
+                        </TableCell>
+                        {!esMovil && <TableCell>{u.isla}</TableCell>}
+                        {!esMovil && <TableCell>{u.marca}</TableCell>}
+                        {!esMovil && (
+                          <TableCell sx={{ color: v.tintaSecundaria }}>
+                            {u.estado}
+                          </TableCell>
+                        )}
+                        <TableCell sx={{ whiteSpace: "nowrap", color: v.tintaSecundaria }}>
+                          {u.fecha}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Box>
+            </>
+          )}
         </CardContent>
       </Card>
-    </Box>
+
+      <Dialog
+        open={Boolean(historial)}
+        onClose={() => setHistorial(null)}
+        fullWidth
+        maxWidth="sm"
+        fullScreen={esMovil}
+      >
+        <DialogTitle sx={{ pr: 6 }}>
+          <Typography component="span" sx={{ fontWeight: 600 }}>
+            {historial?.chasis}
+          </Typography>
+          {historial?.total_movimientos != null && (
+            <Typography sx={{ fontSize: "0.8rem", color: v.tintaSecundaria }}>
+              {historial.total_movimientos} movimientos
+              {historial.marca && historial.marca !== "-" && ` · ${historial.marca}`}
+              {historial.cliente && historial.cliente !== "-" && ` · ${historial.cliente}`}
+            </Typography>
+          )}
+          <IconButton
+            onClick={() => setHistorial(null)}
+            sx={{ position: "absolute", right: 8, top: 8 }}
+            aria-label="Cerrar"
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent dividers>
+          {cargandoHistorial ? (
+            <Box sx={{ py: 4, textAlign: "center" }}>
+              <CircularProgress size={28} />
+            </Box>
+          ) : (
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Fecha</TableCell>
+                  <TableCell>Chofer</TableCell>
+                  <TableCell>Ubicación</TableCell>
+                  <TableCell>Isla</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {(historial?.movimientos || []).map((m, i) => (
+                  <TableRow key={`${m.fecha}-${i}`}>
+                    <TableCell sx={{ whiteSpace: "nowrap" }}>{m.fecha}</TableCell>
+                    <TableCell>{m.chofer}</TableCell>
+                    <TableCell>{m.ubicacion}</TableCell>
+                    <TableCell sx={{ color: v.tintaSecundaria }}>{m.isla}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

@@ -1,7 +1,7 @@
 # Python
 __pycache__/
-*.pyc
-.env
+*.py[cod]
+.venv/
 venv/
 env/
 
@@ -9,19 +9,25 @@ env/
 node_modules/
 dist/
 build/
-.env.local
-.env.development
-.env.production
 
-# IDE
+# Variables de entorno (nunca subir)
+.env
+.env.*
+!.env.example
+
+# Credenciales
+credentials.json
+service_account.json
+
+# Editores
 .vscode/
 .idea/
 *.swp
 *.swo
-.venv/
-credentials.json
-service_account.json
 
-.venv/
-credentials.json
-service_account.json
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Vercel
+.vercel

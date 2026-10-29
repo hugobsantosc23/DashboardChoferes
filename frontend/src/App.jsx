@@ -1,394 +1,413 @@
-import { useEffect, useState } from "react";
-import axios from "axios";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import dayjs from "dayjs";
 
-import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import { DatePicker } from "@mui/x-date-pickers/DatePicker";
-
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import Busqueda from "./pages/Busqueda";
+import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 
 import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-} from "recharts";
-
-import {
+  Alert,
   Box,
+  Button,
   Card,
   CardContent,
-  Typography,
   CircularProgress,
-  Skeleton,
+  CssBaseline,
   IconButton,
-  Chip,
+  Skeleton,
+  ThemeProvider,
   ToggleButton,
   ToggleButtonGroup,
+  Tooltip,
+  Typography,
   useMediaQuery,
-  useTheme,
 } from "@mui/material";
 
+import DarkModeIcon from "@mui/icons-material/DarkModeOutlined";
+import DownloadIcon from "@mui/icons-material/FileDownloadOutlined";
+import LightModeIcon from "@mui/icons-material/LightModeOutlined";
 import RefreshIcon from "@mui/icons-material/Refresh";
+
+import { ENDPOINTS, api, mensajeDeError } from "./api";
+import { VIZ, crearTema } from "./tema";
+
+import GraficoChoferes from "./components/GraficoChoferes";
+import GraficoHoras from "./components/GraficoHoras";
+import GraficoTendencia from "./components/GraficoTendencia";
+import TablaChoferes from "./components/TablaChoferes";
+import TarjetaKpi from "./components/TarjetaKpi";
 import Temporizador from "./components/Temporizador";
+import Busqueda from "./pages/Busqueda";
 
-const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://127.0.0.1:8000" : "");
+const INTERVALO_MS = 600000; // 10 minutos
+const DIAS_TENDENCIA = 14;
+const CLAVE_TEMA = "dashboard-tema";
 
-function App() {
-  const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
-  const isTablet = useMediaQuery(theme.breakpoints.down("md"));
+function Dashboard({ modo, alternarModo }) {
+  const esMovil = useMediaQuery("(max-width:600px)");
+  const v = VIZ[modo];
 
-  const [dashboard, setDashboard] = useState(null);
-  const [choferes, setChoferes] = useState([]);
-  const [fechaSeleccionada, setFechaSeleccionada] = useState(dayjs());
+  const [fecha, setFecha] = useState(dayjs());
+  const [resumen, setResumen] = useState(null);
+  const [tendencia, setTendencia] = useState([]);
+  const [vista, setVista] = useState("movimientos");
+
   const [cargando, setCargando] = useState(false);
-  const [primeraCarga, setPrimeraCarga] = useState(true);
-  const [modoVista, setModoVista] = useState("movimientos");
+  const [error, setError] = useState(null);
+  const [ultimaCarga, setUltimaCarga] = useState(Date.now());
 
-  const cargarMovimientos = async () => {
-    const fecha = fechaSeleccionada.format("YYYY-MM-DD");
-    try {
-      const [dashboardRes, choferesRes] = await Promise.all([
-        axios.get(`${API_URL}/api/movimientos/dashboard?fecha=${fecha}`),
-        axios.get(`${API_URL}/api/movimientos/choferes?fecha=${fecha}`)
-      ]);
-      setDashboard(dashboardRes.data);
-      setChoferes(choferesRes.data);
-    } catch (error) {
-      console.error("Error cargando movimientos:", error);
-    }
-  };
-
-  const cargarDashboard = async () => {
+  const cargar = useCallback(async () => {
+    const dia = fecha.format("YYYY-MM-DD");
     setCargando(true);
-    localStorage.setItem("ultimaActualizacion", Date.now().toString());
-    
-    if (!primeraCarga) {
-      setDashboard(null);
-      setChoferes([]);
+    setError(null);
+
+    try {
+      // Una sola llamada para los KPIs, el detalle por chofer y las horas.
+      // Antes eran dos peticiones por recarga a dos endpoints distintos.
+      const [resResumen, resTendencia] = await Promise.all([
+        api.get(ENDPOINTS.resumen, { params: { fecha: dia } }),
+        api.get(ENDPOINTS.tendencia, { params: { dias: DIAS_TENDENCIA, hasta: dia } }),
+      ]);
+
+      setResumen(resResumen.data);
+      setTendencia(resTendencia.data);
+      setUltimaCarga(Date.now());
+    } catch (e) {
+      setError(mensajeDeError(e));
+    } finally {
+      setCargando(false);
     }
+  }, [fecha]);
 
-    await cargarMovimientos();
-
-    setPrimeraCarga(false);
-    setCargando(false);
-  };
-
+  // Un unico temporizador. El componente Temporizador solo muestra la cuenta
+  // atras; ya no dispara recargas por su cuenta.
   useEffect(() => {
-    cargarDashboard();
-    const intervalo = setInterval(() => {
-      console.log("🔄 Actualizando datos automáticamente (cada 10 min)...");
-      cargarDashboard();
-    }, 600000);
+    cargar();
+    const intervalo = setInterval(cargar, INTERVALO_MS);
     return () => clearInterval(intervalo);
-  }, [fechaSeleccionada]);
+  }, [cargar]);
 
-  const choferesOrdenados = [...choferes].sort((a, b) => b.movimientos - a.movimientos);
+  const kpis = resumen?.kpis;
+  const porChofer = resumen?.por_chofer ?? [];
+  const hoy = dayjs().startOf("day");
+  const esHoy = fecha.isSame(hoy, "day");
 
-  const getChartHeight = () => {
-    if (isMobile) return Math.max(250, choferesOrdenados.length * 45);
-    if (isTablet) return Math.max(300, choferesOrdenados.length * 50);
-    return Math.max(350, choferesOrdenados.length * 60);
-  };
+  const urlExportar = useMemo(
+    () => `${ENDPOINTS.exportar}?fecha=${fecha.format("YYYY-MM-DD")}`,
+    [fecha]
+  );
 
-  const getYAxisWidth = () => {
-    if (isMobile) return 120;
-    if (isTablet) return 150;
-    return 180;
-  };
-
-  const getFontSize = () => {
-    if (isMobile) return 11;
-    if (isTablet) return 14;
-    return 16;
-  };
-
-  const getLabelFontSize = () => {
-    if (isMobile) return 11;
-    if (isTablet) return 14;
-    return 18;
-  };
-
-  const getChipSize = () => {
-    if (isMobile) return "small";
-    return "medium";
-  };
-
-  const getBarSize = () => {
-    if (isMobile) return 14;
-    if (isTablet) return 18;
-    return 22;
-  };
-
-  const getBarGap = () => {
-    if (isMobile) return 15;
-    if (isTablet) return 20;
-    return 30;
-  };
-
-  if (primeraCarga && cargando) {
-    return (
-      <Box sx={{ background: "#f4f6f8", minHeight: "100vh", padding: isMobile ? 2 : 4 }}>
-        <Typography variant={isMobile ? "h5" : "h4"} fontWeight="bold" sx={{ mb: 3, color: "primary.main", textAlign: "center" }}>
-          📦 Movimientos de Unidades
-        </Typography>
-        <Box sx={{ display: "flex", justifyContent: "center", gap: isMobile ? 1 : 3, flexWrap: "wrap", mb: 3 }}>
-          {[1, 2, 3].map((i) => (
-            <Card key={i} sx={{ textAlign: "center", minWidth: isMobile ? 80 : 180 }}>
-              <CardContent sx={{ padding: isMobile ? 1 : 2 }}>
-                <Skeleton variant="text" width={isMobile ? 50 : 120} sx={{ mx: "auto" }} />
-                <Skeleton variant="text" width={isMobile ? 30 : 80} height={isMobile ? 30 : 60} sx={{ mx: "auto" }} />
-              </CardContent>
-            </Card>
-          ))}
-        </Box>
-      </Box>
-    );
-  }
-
-  if (!dashboard) {
-    return (
-      <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" }}>
-        <CircularProgress />
-        <Typography variant="h6" sx={{ ml: 2 }}>Cargando movimientos...</Typography>
-      </Box>
-    );
-  }
+  const primeraCarga = !resumen && cargando;
 
   return (
-    <Box sx={{ background: "#f4f6f8", minHeight: "100vh", padding: isMobile ? 1.5 : 4 }}>
-      
-      {/* HEADER */}
-      <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", mb: isMobile ? 2 : 3 }}>
-        <Typography variant={isMobile ? "h5" : "h4"} fontWeight="bold" sx={{ mb: 1, color: "primary.main", textAlign: "center" }}>
-          📦 Movimientos de Unidades
-        </Typography>
-        <Box sx={{ display: "flex", alignItems: "center", gap: isMobile ? 0.5 : 1, flexWrap: "wrap", justifyContent: "center" }}>
-          <Temporizador onActualizar={cargarDashboard} />
-          <Chip 
-            label={`📅 ${fechaSeleccionada.format("DD/MM/YYYY")}`}
-            color="primary"
-            size={isMobile ? "small" : "medium"}
-          />
-          <IconButton 
-            onClick={cargarDashboard} 
-            disabled={cargando}
-            color="primary"
-            size={isMobile ? "small" : "medium"}
-          >
-            <RefreshIcon fontSize={isMobile ? "small" : "medium"} />
-          </IconButton>
-          {cargando && <CircularProgress size={isMobile ? 20 : 24} />}
-        </Box>
-      </Box>
-
-      {/* FILTROS */}
-      <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", gap: isMobile ? 1 : 2, mb: isMobile ? 2 : 3, flexWrap: "wrap" }}>
-        <LocalizationProvider dateAdapter={AdapterDayjs}>
-          <DatePicker
-            label="Seleccionar fecha"
-            value={fechaSeleccionada}
-            format="DD/MM/YYYY"
-            onChange={(nuevaFecha) => {
-              if (nuevaFecha) {
-                setFechaSeleccionada(nuevaFecha);
-                localStorage.setItem("ultimaActualizacion", Date.now().toString());
-              }
-            }}
-            disabled={cargando}
-            slotProps={{ textField: { size: isMobile ? "small" : "medium" } }}
-          />
-        </LocalizationProvider>
-
-        <ToggleButtonGroup
-          value={modoVista}
-          exclusive
-          onChange={(e, nuevoModo) => {
-            if (nuevoModo !== null) setModoVista(nuevoModo);
+    <Box sx={{ minHeight: "100vh", bgcolor: v.plano, pb: 6 }}>
+      <Box sx={{ maxWidth: 1180, mx: "auto", px: { xs: 2, sm: 3 }, pt: { xs: 2, sm: 4 } }}>
+        {/* ---------- Cabecera ---------- */}
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            gap: 2,
+            mb: 3,
           }}
-          size={isMobile ? "small" : "medium"}
         >
-          <ToggleButton value="movimientos" sx={{ fontSize: isMobile ? "0.75rem" : "0.875rem" }}>
-            🚚 MOVIMIENTOS
-          </ToggleButton>
-          <ToggleButton value="busqueda" sx={{ fontSize: isMobile ? "0.75rem" : "0.875rem" }}>
-            🔍 BUSCAR UNIDAD
-          </ToggleButton>
-        </ToggleButtonGroup>
-      </Box>
-
-      {/* BÚSQUEDA */}
-      {modoVista === "busqueda" ? (
-        <Busqueda />
-      ) : (
-        <>
-          {/* KPI CARDS */}
-          <Box sx={{ display: "flex", justifyContent: "center", gap: isMobile ? 1 : 3, flexWrap: "wrap", mb: isMobile ? 2 : 3 }}>
-            <Card sx={{ textAlign: "center", minWidth: isMobile ? 80 : 180, flex: "0 0 auto", width: isMobile ? "28%" : "auto", boxShadow: 2 }}>
-              <CardContent sx={{ padding: isMobile ? 1 : 2 }}>
-                <Typography variant={isMobile ? "caption" : "h6"} color="textSecondary" gutterBottom sx={{ fontSize: isMobile ? "0.65rem" : "1rem" }}>
-                  Total Movimientos
-                </Typography>
-                <Typography variant={isMobile ? "h5" : "h3"} fontWeight="bold" sx={{ fontSize: isMobile ? "1.2rem" : "3rem" }}>
-                  {dashboard.total || 0}
-                </Typography>
-              </CardContent>
-            </Card>
-            <Card sx={{ textAlign: "center", minWidth: isMobile ? 80 : 180, flex: "0 0 auto", width: isMobile ? "28%" : "auto", boxShadow: 2 }}>
-              <CardContent sx={{ padding: isMobile ? 1 : 2 }}>
-                <Typography variant={isMobile ? "caption" : "h6"} color="textSecondary" gutterBottom sx={{ fontSize: isMobile ? "0.65rem" : "1rem" }}>
-                  Choferes Activos
-                </Typography>
-                <Typography variant={isMobile ? "h5" : "h3"} fontWeight="bold" sx={{ color: "#22c55e", fontSize: isMobile ? "1.2rem" : "3rem" }}>
-                  {dashboard.choferes_activos || 0}
-                </Typography>
-              </CardContent>
-            </Card>
-            <Card sx={{ textAlign: "center", minWidth: isMobile ? 80 : 180, flex: "0 0 auto", width: isMobile ? "28%" : "auto", boxShadow: 2 }}>
-              <CardContent sx={{ padding: isMobile ? 1 : 2 }}>
-                <Typography variant={isMobile ? "caption" : "h6"} color="textSecondary" gutterBottom sx={{ fontSize: isMobile ? "0.65rem" : "1rem" }}>
-                  Unidades Movidas
-                </Typography>
-                <Typography variant={isMobile ? "h5" : "h3"} fontWeight="bold" sx={{ color: "#3b82f6", fontSize: isMobile ? "1.2rem" : "3rem" }}>
-                  {dashboard.unidades_movidas || 0}
-                </Typography>
-              </CardContent>
-            </Card>
+          <Box>
+            <Typography variant="h4" sx={{ color: v.tintaPrincipal, lineHeight: 1.2 }}>
+              Movimientos de unidades
+            </Typography>
+            <Typography sx={{ color: v.tintaSecundaria, fontSize: "0.85rem", mt: 0.5 }}>
+              {esHoy ? "Hoy" : fecha.format("dddd")} · {fecha.format("DD/MM/YYYY")}
+            </Typography>
           </Box>
 
-          {/* GRÁFICO PRINCIPAL */}
-          <Box sx={{ mt: isMobile ? 2 : 3 }}>
-            <Card>
-              <CardContent sx={{ padding: isMobile ? 1.5 : 2 }}>
-                <Typography variant={isMobile ? "subtitle1" : "h5"} gutterBottom sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
-                  🚚 Movimientos por Chofer
-                  <Chip 
-                    label={`📊 ${choferesOrdenados.reduce((sum, item) => sum + item.movimientos, 0)}`}
-                    size={getChipSize()} 
-                    color="primary"
-                    variant="outlined"
-                  />
-                </Typography>
-
-                {cargando ? (
-                  <Skeleton variant="rounded" height={isMobile ? 200 : 350} />
-                ) : choferesOrdenados.length === 0 ? (
-                  <Box sx={{ textAlign: "center", py: isMobile ? 2 : 4 }}>
-                    <Typography variant={isMobile ? "body2" : "h6"} color="textSecondary">
-                      No hay movimientos registrados para esta fecha
-                    </Typography>
-                  </Box>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
+            <Temporizador ultimaCarga={ultimaCarga} intervaloMs={INTERVALO_MS} />
+            <Tooltip title="Actualizar ahora">
+              <IconButton onClick={cargar} disabled={cargando} size="small">
+                {cargando ? <CircularProgress size={18} /> : <RefreshIcon fontSize="small" />}
+              </IconButton>
+            </Tooltip>
+            <Tooltip title={modo === "dark" ? "Modo claro" : "Modo oscuro"}>
+              <IconButton onClick={alternarModo} size="small">
+                {modo === "dark" ? (
+                  <LightModeIcon fontSize="small" />
                 ) : (
-                  <ResponsiveContainer key={fechaSeleccionada.format("YYYY-MM-DD")} width="100%" height={getChartHeight()}>
-                    <BarChart data={choferesOrdenados} layout="vertical" margin={{ top: 10, right: isMobile ? 30 : 80, left: isMobile ? 5 : 20, bottom: 10 }} barSize={getBarSize()} barCategoryGap={getBarGap()}>
-                      <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                      <XAxis type="number" domain={[0, 'dataMax + 2']} tick={{ fontSize: isMobile ? 10 : 12 }} />
-                      <YAxis dataKey="nombre" type="category" width={getYAxisWidth()} tick={{ fontSize: getFontSize(), fontWeight: 600 }} />
-                      <Tooltip 
-                        formatter={(value, name) => {
-                          if (name === "movimientos") return [`${value} 🚚`, "Movimientos"];
-                          if (name === "unidades") return [`${value} 📦`, "Unidades"];
-                          return [value, name];
-                        }}
-                      />
-                      <Legend verticalAlign="top" height={isMobile ? 25 : 36} wrapperStyle={{ fontSize: isMobile ? 10 : 14 }} />
-                      <Bar 
-                        dataKey="movimientos" 
-                        fill="#3b82f6" 
-                        radius={[0, 4, 4, 0]}
-                        label={{ 
-                          position: "right", 
-                          formatter: (value) => value > 0 ? `🚚 ${value}` : "",
-                          fontSize: getLabelFontSize(),
-                          fill: "#2563eb",
-                          fontWeight: "bold"
-                        }} 
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <DarkModeIcon fontSize="small" />
                 )}
+              </IconButton>
+            </Tooltip>
+          </Box>
+        </Box>
+
+        {/* ---------- Filtros: una sola fila, arriba de todo lo que afectan ---------- */}
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 1.5,
+            mb: 3,
+            flexWrap: "wrap",
+          }}
+        >
+          <LocalizationProvider dateAdapter={AdapterDayjs}>
+            <DatePicker
+              label="Fecha"
+              value={fecha}
+              format="DD/MM/YYYY"
+              maxDate={hoy}
+              onChange={(nueva) => nueva && setFecha(nueva)}
+              slotProps={{ textField: { size: "small", sx: { width: 168 } } }}
+            />
+          </LocalizationProvider>
+
+          {!esHoy && (
+            <Button size="small" onClick={() => setFecha(dayjs())}>
+              Ir a hoy
+            </Button>
+          )}
+
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={vista}
+            onChange={(e, nueva) => nueva && setVista(nueva)}
+          >
+            <ToggleButton value="movimientos">Movimientos</ToggleButton>
+            <ToggleButton value="busqueda">Buscar unidad</ToggleButton>
+          </ToggleButtonGroup>
+
+          {vista === "movimientos" && (
+            <Button
+              size="small"
+              component="a"
+              href={urlExportar}
+              startIcon={<DownloadIcon fontSize="small" />}
+              sx={{ ml: "auto" }}
+            >
+              CSV
+            </Button>
+          )}
+        </Box>
+
+        {error && (
+          <Alert
+            severity="error"
+            sx={{ mb: 3 }}
+            action={
+              <Button size="small" color="inherit" onClick={cargar}>
+                Reintentar
+              </Button>
+            }
+          >
+            {error}
+          </Alert>
+        )}
+
+        {vista === "busqueda" ? (
+          <Busqueda />
+        ) : primeraCarga ? (
+          <EsqueletoCarga esMovil={esMovil} />
+        ) : (
+          // Durante una recarga se mantiene el render anterior atenuado en vez
+          // de volver a los esqueletos: no hay salto de maquetado ni parpadeo.
+          <Box
+            sx={{
+              opacity: cargando ? 0.55 : 1,
+              pointerEvents: cargando ? "none" : "auto",
+              transition: "opacity 160ms ease",
+            }}
+          >
+            {/* ---------- Indicadores ---------- */}
+            <Box
+              sx={{
+                display: "grid",
+                gap: 1.5,
+                mb: 3,
+                gridTemplateColumns: {
+                  xs: "1fr 1fr",
+                  sm: "1.4fr 1fr 1fr",
+                  md: "1.5fr 1fr 1fr 1fr 1fr",
+                },
+              }}
+            >
+              <Box sx={{ gridColumn: { xs: "1 / -1", sm: "auto" } }}>
+                <TarjetaKpi
+                  destacado
+                  etiqueta="Movimientos del día"
+                  valor={kpis?.total ?? 0}
+                  variacion={kpis?.variacion_pct}
+                  nota={
+                    kpis?.promedio_7_dias
+                      ? `vs ${kpis.promedio_7_dias} de promedio`
+                      : "sin referencia previa"
+                  }
+                />
+              </Box>
+              <TarjetaKpi etiqueta="Choferes activos" valor={kpis?.choferes_activos ?? 0} />
+              <TarjetaKpi etiqueta="Unidades movidas" valor={kpis?.unidades_movidas ?? 0} />
+              <TarjetaKpi
+                etiqueta="Promedio por chofer"
+                valor={kpis?.promedio_por_chofer ?? 0}
+                sufijo="mov."
+              />
+              <TarjetaKpi etiqueta="Hora pico" valor={kpis?.hora_pico ?? "–"} />
+            </Box>
+
+            {/* ---------- Movimientos por chofer ---------- */}
+            <Card sx={{ mb: 2 }}>
+              <CardContent>
+                <Encabezado
+                  titulo="Movimientos por chofer"
+                  detalle={`${porChofer.length} ${
+                    porChofer.length === 1 ? "chofer" : "choferes"
+                  } con actividad`}
+                  modo={modo}
+                />
+                <GraficoChoferes datos={porChofer} />
               </CardContent>
             </Card>
-          </Box>
 
-          {/* TABLA RESUMEN */}
-          {!cargando && choferesOrdenados.length > 0 && (
-            <Box sx={{ mt: isMobile ? 2 : 3 }}>
+            {/* ---------- Por hora y tendencia ---------- */}
+            <Box
+              sx={{
+                display: "grid",
+                gap: 2,
+                mb: 2,
+                gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
+              }}
+            >
               <Card>
-                <CardContent sx={{ padding: isMobile ? 1 : 2 }}>
-                  <Typography variant={isMobile ? "subtitle1" : "h5"} gutterBottom>
-                    📊 Resumen por Chofer
-                  </Typography>
-                  <Box sx={{ overflowX: 'auto' }}>
-                    <table style={{ 
-                      width: '100%', 
-                      borderCollapse: 'collapse',
-                      backgroundColor: '#fafafa',
-                      borderRadius: '8px',
-                      overflow: 'hidden',
-                      fontSize: isMobile ? '10px' : '14px'
-                    }}>
-                      <thead>
-                        <tr style={{ backgroundColor: '#e0e0e0' }}>
-                          <th style={{ padding: isMobile ? '6px 6px' : '10px 12px', textAlign: 'left' }}>Chofer</th>
-                          <th style={{ padding: isMobile ? '6px 6px' : '10px 12px', textAlign: 'center' }}>🚚 Movimientos</th>
-                          <th style={{ padding: isMobile ? '6px 6px' : '10px 12px', textAlign: 'center' }}>📦 Unidades</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {choferesOrdenados.map((item, index) => (
-                          <tr key={item.nombre} style={{ 
-                            borderBottom: index < choferesOrdenados.length - 1 ? '1px solid #e0e0e0' : 'none',
-                            backgroundColor: index % 2 === 0 ? '#ffffff' : '#f5f5f5'
-                          }}>
-                            <td style={{ padding: isMobile ? '6px 6px' : '10px 12px', fontWeight: '500', fontSize: isMobile ? '9px' : '14px' }}>
-                              {item.nombre}
-                            </td>
-                            <td style={{ padding: isMobile ? '6px 6px' : '10px 12px', textAlign: 'center', fontWeight: 'bold', color: '#2563eb', fontSize: isMobile ? '9px' : '14px' }}>
-                              {item.movimientos}
-                            </td>
-                            <td style={{ padding: isMobile ? '6px 6px' : '10px 12px', textAlign: 'center', fontSize: isMobile ? '9px' : '14px' }}>
-                              {item.unidades}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </Box>
+                <CardContent>
+                  <Encabezado
+                    titulo="Ritmo por hora"
+                    detalle={
+                      kpis?.hora_pico
+                        ? `Mayor actividad a las ${kpis.hora_pico}`
+                        : "Movimientos registrados en cada hora"
+                    }
+                    modo={modo}
+                  />
+                  <GraficoHoras datos={resumen?.por_hora} horaPico={kpis?.hora_pico} />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent>
+                  <Encabezado
+                    titulo={`Últimos ${DIAS_TENDENCIA} días`}
+                    detalle="Movimientos por día, con el día seleccionado marcado"
+                    modo={modo}
+                  />
+                  <GraficoTendencia
+                    datos={tendencia}
+                    diaSeleccionado={fecha.format("YYYY-MM-DD")}
+                    promedio={kpis?.promedio_7_dias ?? 0}
+                  />
                 </CardContent>
               </Card>
             </Box>
-          )}
 
-          {/* FOOTER */}
-          <Box sx={{ mt: isMobile ? 2 : 3, textAlign: "center" }}>
-            <Typography variant="caption" color="textSecondary" sx={{ fontSize: isMobile ? '9px' : '12px' }}>
-              Última actualización: {new Date().toLocaleTimeString()}
-              {cargando && " (actualizando...)"}
+            {/* ---------- Tabla ---------- */}
+            {porChofer.length > 0 && (
+              <Card>
+                <CardContent>
+                  <Encabezado titulo="Detalle por chofer" modo={modo} />
+                  <TablaChoferes datos={porChofer} />
+                </CardContent>
+              </Card>
+            )}
+
+            <Typography
+              sx={{ mt: 3, textAlign: "center", fontSize: "0.72rem", color: v.tintaSuave }}
+            >
+              Actualizado a las {new Date(ultimaCarga).toLocaleTimeString("es-PE")}
+              {cargando && " · actualizando…"}
             </Typography>
           </Box>
-        </>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+function Encabezado({ titulo, detalle, modo }) {
+  const v = VIZ[modo];
+  return (
+    <Box sx={{ mb: 2 }}>
+      <Typography variant="h5" sx={{ color: v.tintaPrincipal }}>
+        {titulo}
+      </Typography>
+      {detalle && (
+        <Typography sx={{ color: v.tintaSecundaria, fontSize: "0.78rem", mt: 0.25 }}>
+          {detalle}
+        </Typography>
       )}
     </Box>
   );
 }
 
-function AppRouter() {
+function EsqueletoCarga({ esMovil }) {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<App />} />
-        <Route path="/busqueda" element={<Busqueda />} />
-      </Routes>
-    </BrowserRouter>
+    <Box>
+      <Box
+        sx={{
+          display: "grid",
+          gap: 1.5,
+          mb: 3,
+          gridTemplateColumns: { xs: "1fr 1fr", md: "1.5fr 1fr 1fr 1fr 1fr" },
+        }}
+      >
+        {[0, 1, 2, 3, 4].map((i) => (
+          <Skeleton key={i} variant="rounded" height={i === 0 ? 118 : 92} />
+        ))}
+      </Box>
+      <Skeleton variant="rounded" height={esMovil ? 240 : 320} sx={{ mb: 2 }} />
+      <Box
+        sx={{
+          display: "grid",
+          gap: 2,
+          gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
+        }}
+      >
+        <Skeleton variant="rounded" height={260} />
+        <Skeleton variant="rounded" height={260} />
+      </Box>
+    </Box>
   );
 }
 
-export default AppRouter;
+export default function App() {
+  const prefiereOscuro = useMediaQuery("(prefers-color-scheme: dark)");
+
+  const [modo, setModo] = useState(() => {
+    try {
+      const guardado = localStorage.getItem(CLAVE_TEMA);
+      if (guardado === "light" || guardado === "dark") return guardado;
+    } catch {
+      // localStorage puede fallar en modo privado; se usa la preferencia del sistema.
+    }
+    return null;
+  });
+
+  const modoActivo = modo ?? (prefiereOscuro ? "dark" : "light");
+
+  const alternarModo = () => {
+    const nuevo = modoActivo === "dark" ? "light" : "dark";
+    setModo(nuevo);
+    try {
+      localStorage.setItem(CLAVE_TEMA, nuevo);
+    } catch {
+      // Si no se puede guardar, el cambio vale solo para esta sesión.
+    }
+  };
+
+  const tema = useMemo(() => crearTema(modoActivo), [modoActivo]);
+
+  return (
+    <ThemeProvider theme={tema}>
+      <CssBaseline />
+      <Dashboard modo={modoActivo} alternarModo={alternarModo} />
+    </ThemeProvider>
+  );
+}
