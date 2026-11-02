@@ -252,7 +252,11 @@ def resumen(
             promedio_previo = float(ultimos.mean())
 
     total = len(df)
-    activos = int(df["chofer"].nunique())
+
+    # Personas, no cuentas: PROTELANDTEMP la comparten 4 choferes, asi que
+    # contarla como una sola persona subestima el equipo que trabajo ese dia
+    # y dispara el promedio por chofer.
+    activos = sum(_personas(c) for c in df["chofer"].unique())
 
     return {
         "fecha": dia.isoformat(),
