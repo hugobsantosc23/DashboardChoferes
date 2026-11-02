@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import unicodedata
 import urllib.parse
 from datetime import date, datetime
@@ -21,8 +22,11 @@ from app.config import (
     COLUMNA_FECHA_GVIZ,
     EXPORT_URL,
     GVIZ_URL,
+    NO_CUENTAN_SOLO_USUARIOS,
     TIMEOUT_DESCARGA,
+    UBICACIONES_NO_CUENTAN,
     USAR_CONSULTA_FILTRADA,
+    VENTANA_DUPLICADOS_SEG,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -106,6 +110,94 @@ def _parsear_fechas(crudas: pd.Series) -> pd.Series:
     return fechas
 
 
+def _clave_sitio(df: pd.DataFrame) -> list[str]:
+    """Columnas que identifican "el mismo vehiculo en el mismo sitio"."""
+    return ["chasis"] + [c for c in ("isla", "ubicacion") if c in df.columns]
+
+
+def marcar_duplicados_del_sistema(df: pd.DataFrame) -> pd.DataFrame:
+    """Marca como repeticion los registros que el sistema VARI duplico.
+
+    Un movimiento real exige bajarse del vehiculo, abrir la aplicacion,
+    escanear el QR y marcar el sitio: no ocurre dos veces sobre el mismo
+    vehiculo y el mismo sitio en cuestion de segundos. Cuando eso aparece en
+    los datos es el sistema subiendo la misma unidad varias veces, y contarlo
+    infla la produccion del chofer.
+
+    Anade la columna booleana `repeticion`. No borra nada: asi el endpoint de
+    diagnostico puede mostrar exactamente que se esta descartando.
+
+    Con la ventana en 0 solo se colapsan las horas identicas, que es el caso
+    tipico del bug. Con un valor negativo no se marca nada y el conteo queda
+    en bruto, tal como lo entrega el sistema.
+    """
+    df = df.copy()
+
+    if df.empty or VENTANA_DUPLICADOS_SEG < 0:
+        df["repeticion"] = False
+        df["fecha_previa_mismo_sitio"] = pd.NaT
+        df["racha"] = range(len(df))
+        return df
+
+    clave = _clave_sitio(df)
+
+    # Orden estable: con varias filas de fecha identica (justo lo que produce
+    # el bug del sistema) un orden no determinista haria que cada recalculo
+    # eligiera una fila distinta como "la primera". Se calcula UNA vez y la
+    # fecha anterior se guarda como columna, para que ningun otro sitio tenga
+    # que volver a ordenar y llegue a un reparto distinto.
+    df = df.sort_values(clave + ["fecha"], kind="stable")
+
+    previa = df.groupby(clave, sort=False)["fecha"].shift()
+    desde_anterior = df["fecha"] - previa
+    dentro_ventana = desde_anterior.notna() & (
+        desde_anterior <= pd.Timedelta(seconds=VENTANA_DUPLICADOS_SEG)
+    )
+
+    df["fecha_previa_mismo_sitio"] = previa
+    df["repeticion"] = dentro_ventana
+
+    # Identificador de racha: todas las copias de una misma subida comparten
+    # numero. Sin esto, una unidad repetida 20 veces aparece como 19 lineas
+    # identicas en el diagnostico y tapa los demas casos.
+    df["racha"] = (~dentro_ventana).cumsum()
+
+    # La fecha previa solo tiene sentido en las filas marcadas.
+    df.loc[~df["repeticion"], "fecha_previa_mismo_sitio"] = pd.NaT
+
+    return df.sort_values("fecha", kind="stable").reset_index(drop=True)
+
+
+def marcar_no_movimientos(df: pd.DataFrame) -> pd.DataFrame:
+    """Marca las filas que son un cambio de estado, no un movimiento.
+
+    Dejar un vehiculo en una isla de aprobados es marcar calidad, no llevarlo
+    a otro sitio. Anade la columna `aprobacion`; no borra nada, para que el
+    diagnostico pueda ensenar exactamente que se esta descontando.
+    """
+    df = df.copy()
+
+    if df.empty or not UBICACIONES_NO_CUENTAN:
+        df["aprobacion"] = False
+        return df
+
+    patron = re.compile(UBICACIONES_NO_CUENTAN, re.IGNORECASE)
+
+    def _casa(texto: object) -> bool:
+        return bool(patron.search(str(texto or "")))
+
+    marca = df["ubicacion"].map(_casa) if "ubicacion" in df.columns else False
+    if "isla" in df.columns:
+        marca = marca | df["isla"].map(_casa)
+
+    # Si hay lista de usuarios, la regla solo les afecta a ellos.
+    if NO_CUENTAN_SOLO_USUARIOS:
+        marca = marca & df["chofer"].isin(NO_CUENTAN_SOLO_USUARIOS)
+
+    df["aprobacion"] = marca
+    return df
+
+
 def _procesar(texto_csv: str) -> pd.DataFrame:
     df = pd.read_csv(io.StringIO(texto_csv), dtype=str)
     filas_crudas = len(df)
@@ -142,15 +234,47 @@ def _procesar(texto_csv: str) -> pd.DataFrame:
     if CHOFERES_FILTRO:
         df = df[df["chofer"].isin(CHOFERES_FILTRO)]
 
-    df = df.drop_duplicates(subset=["fecha", "chasis", "chofer"])
     df = df.sort_values("fecha").reset_index(drop=True)
 
+    # Ojo: aqui NO se hace drop_duplicates. Las filas identicas tambien son
+    # repeticiones del sistema, y si se quitaran por separado el diagnostico
+    # las contaria de menos: diria 3 duplicados donde en realidad hubo 5, y el
+    # inflado de cada trabajador se veria mas pequeno de lo que es.
+    # marcar_duplicados_del_sistema() las incluye, porque su diferencia de
+    # tiempo es 0 y entra en cualquier ventana.
+    df = marcar_duplicados_del_sistema(df)
+    df = marcar_no_movimientos(df)
+
+    repeticiones = int(df["repeticion"].sum())
+    aprobaciones = int(df["aprobacion"].sum())
+
     logger.info(
-        "Hoja procesada: %d filas crudas -> %d movimientos validos",
+        "Hoja procesada: %d filas crudas -> %d filas validas "
+        "(%d repeticiones del sistema, %d aprobaciones, %d movimientos reales)",
         filas_crudas,
         len(df),
+        repeticiones,
+        aprobaciones,
+        len(df) - repeticiones - aprobaciones,
     )
     return df
+
+
+def solo_movimientos_reales(df: pd.DataFrame) -> pd.DataFrame:
+    """Solo lo que cuenta como produccion.
+
+    Deja fuera las repeticiones del sistema y los cambios de estado que no
+    son un movimiento (las islas de aprobados).
+    """
+    if df.empty:
+        return df
+
+    fuera = pd.Series(False, index=df.index)
+    for columna in ("repeticion", "aprobacion"):
+        if columna in df.columns:
+            fuera = fuera | df[columna].fillna(False)
+
+    return df[~fuera]
 
 
 def obtener_movimientos(

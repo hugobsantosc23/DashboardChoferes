@@ -54,6 +54,15 @@ function TablaChoferes({ datos }) {
                 sx={{ fontWeight: 500, color: v.tintaPrincipal, px: esMovil ? 1 : 2 }}
               >
                 {fila.nombre}
+                {fila.personas > 1 && (
+                  <Typography
+                    component="span"
+                    sx={{ ml: 0.75, fontSize: "0.7rem", color: v.tintaSuave }}
+                  >
+                    · cuenta de {fila.personas} personas
+                    {fila.por_persona != null && ` (${fila.por_persona} c/u)`}
+                  </Typography>
+                )}
               </TableCell>
               <TableCell sx={{ ...numero, fontWeight: 600, px: esMovil ? 1 : 2 }}>
                 {fila.movimientos}
@@ -78,7 +87,8 @@ function TablaChoferes({ datos }) {
 
       <Typography sx={{ mt: 1, fontSize: "0.7rem", color: v.tintaSuave }}>
         «Unidades» cuenta chasis distintos: un mismo vehículo movido dos veces
-        suma dos movimientos y una unidad.
+        suma dos movimientos y una unidad. Dejar un vehículo en una isla de
+        aprobados no cuenta como movimiento.
         {!esMovil &&
           " «Por hora» es el ritmo entre el primer y el último registro del día."}
       </Typography>

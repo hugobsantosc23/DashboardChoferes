@@ -20,7 +20,14 @@ from app.config import (
     USAR_CONSULTA_FILTRADA,
     ZONA_HORARIA,
 )
-from app.scraper import estado_cache, obtener_movimientos
+from app.config import (
+    CUENTAS_COMPARTIDAS,
+    NOMBRES_CHOFERES,
+    NO_CUENTAN_SOLO_USUARIOS,
+    UBICACIONES_NO_CUENTAN,
+    VENTANA_DUPLICADOS_SEG,
+)
+from app.scraper import estado_cache, obtener_movimientos, solo_movimientos_reales
 
 app = FastAPI(
     title="Dashboard de Movimientos",
@@ -62,18 +69,37 @@ def _cachear(response: Response) -> None:
     )
 
 
-def _cargar(desde: date | None = None) -> pd.DataFrame:
+def _cargar(desde: date | None = None, con_repeticiones: bool = False) -> pd.DataFrame:
+    """Carga la hoja.
+
+    Por defecto devuelve solo los movimientos reales: el sistema VARI duplica
+    registros al subir una unidad, y contarlos infla la produccion de cada
+    chofer. `con_repeticiones=True` devuelve todo, para el diagnostico.
+    """
     try:
-        return obtener_movimientos(desde=desde if USAR_CONSULTA_FILTRADA else None)
+        df = obtener_movimientos(desde=desde if USAR_CONSULTA_FILTRADA else None)
     except Exception as error:  # noqa: BLE001
         raise HTTPException(
             status_code=503,
             detail=f"No se pudo leer la hoja de Google: {error}",
         ) from error
 
+    return df if con_repeticiones else solo_movimientos_reales(df)
+
 
 def _del_dia(df: pd.DataFrame, dia: date) -> pd.DataFrame:
     return df[df["fecha"].dt.date == dia]
+
+
+def _nombre(usuario: object) -> str:
+    """Nombre para mostrar. Si no hay alias, se usa el usuario del sistema."""
+    clave = str(usuario or "").strip().upper()
+    return NOMBRES_CHOFERES.get(clave, clave)
+
+
+def _personas(usuario: object) -> int:
+    """Cuantas personas comparten esa cuenta. 1 si no es compartida."""
+    return CUENTAS_COMPARTIDAS.get(str(usuario or "").strip().upper(), 1)
 
 
 def _texto(valor: object, defecto: str = "-") -> str:
@@ -101,10 +127,16 @@ def inicio():
 def health():
     """Comprueba que el backend corre y que puede leer la hoja."""
     try:
-        df = _cargar()
+        crudo = _cargar(con_repeticiones=True)
+        df = solo_movimientos_reales(crudo)
         return {
             "ok": True,
             "movimientos_totales": len(df),
+            "duplicados_del_sistema": int(crudo["repeticion"].sum()) if "repeticion" in crudo else 0,
+            "aprobaciones_no_contadas": int(crudo["aprobacion"].sum()) if "aprobacion" in crudo else 0,
+            "ventana_duplicados_seg": VENTANA_DUPLICADOS_SEG,
+            "patron_no_cuentan": UBICACIONES_NO_CUENTAN,
+            "no_cuentan_solo_usuarios": NO_CUENTAN_SOLO_USUARIOS or "todos",
             "rango": {
                 "desde": df["fecha"].min().isoformat() if not df.empty else None,
                 "hasta": df["fecha"].max().isoformat() if not df.empty else None,
@@ -129,8 +161,16 @@ def resumen(
     _cachear(response)
 
     dia = fecha or _hoy()
-    completo = _cargar(desde=dia - timedelta(days=DIAS_TENDENCIA))
+    crudo = _cargar(desde=dia - timedelta(days=DIAS_TENDENCIA), con_repeticiones=True)
+    completo = solo_movimientos_reales(crudo)
+
     df = _del_dia(completo, dia)
+
+    # Cuantas repeticiones del sistema se descartaron ese dia: es la diferencia
+    # entre lo que dice el sistema en bruto y la produccion real.
+    del_dia_crudo = _del_dia(crudo, dia)
+    descartados = int(del_dia_crudo["repeticion"].sum()) if "repeticion" in del_dia_crudo else 0
+    aprobaciones = int(del_dia_crudo["aprobacion"].sum()) if "aprobacion" in del_dia_crudo else 0
 
     vacio = {
         "fecha": dia.isoformat(),
@@ -142,6 +182,8 @@ def resumen(
             "hora_pico": None,
             "promedio_7_dias": 0,
             "variacion_pct": None,
+            "duplicados_descartados": descartados,
+            "aprobaciones_descartadas": aprobaciones,
         },
         "por_chofer": [],
         "por_hora": [],
@@ -167,9 +209,17 @@ def resumen(
     por_chofer = []
     for fila in agrupado.itertuples():
         span_horas = (fila.ultimo - fila.primero).total_seconds() / 3600
+        personas = _personas(fila.chofer)
         por_chofer.append(
             {
-                "nombre": fila.chofer,
+                "nombre": _nombre(fila.chofer),
+                "usuario": fila.chofer,
+                "personas": personas,
+                # En una cuenta compartida el total no es comparable con el de
+                # una persona sola, asi que se da tambien el reparto.
+                "por_persona": round(fila.movimientos / personas, 1)
+                if personas > 1
+                else None,
                 "movimientos": int(fila.movimientos),
                 "unidades": int(fila.unidades),
                 "primero": fila.primero.strftime("%H:%M"),
@@ -216,6 +266,8 @@ def resumen(
             "variacion_pct": round((total - promedio_previo) / promedio_previo * 100)
             if promedio_previo
             else None,
+            "duplicados_descartados": descartados,
+            "aprobaciones_descartadas": aprobaciones,
         },
         "por_chofer": por_chofer,
         "por_hora": por_hora,
@@ -293,7 +345,7 @@ def buscar_unidades(
     resultados = [
         {
             "chasis": fila["chasis"],
-            "chofer": fila["chofer"],
+            "chofer": _nombre(fila["chofer"]),
             # Estas son las columnas que la hoja trae de verdad. Antes se pedian
             # "origen" y "destino", que no existen, y siempre salia "-".
             "ubicacion": _texto(fila.get("ubicacion")),
@@ -332,13 +384,97 @@ def historial_unidad(response: Response, chasis: str):
         "movimientos": [
             {
                 "fecha": fila["fecha"].strftime("%d/%m/%Y %H:%M"),
-                "chofer": fila["chofer"],
+                "chofer": _nombre(fila["chofer"]),
                 "ubicacion": _texto(fila.get("ubicacion")),
                 "isla": _texto(fila.get("isla")),
                 "estado": _texto(fila.get("estado")),
             }
             for _, fila in movimientos.iterrows()
         ],
+    }
+
+
+# --------------------------------------------------------------------------
+# Duplicados del sistema
+# --------------------------------------------------------------------------
+
+@app.get("/api/diagnostico/duplicados")
+def diagnostico_duplicados(
+    response: Response,
+    fecha: date | None = Query(None, description="Un dia concreto; vacio = todo"),
+    ejemplos: int = Query(20, ge=0, le=200),
+):
+    """Muestra que se esta descartando como repeticion del sistema y cuanto pesa.
+
+    Sirve para dos cosas: ver cuanto inflaban el conteo de cada trabajador, y
+    comprobar que la ventana no se esta comiendo movimientos legitimos. Si en
+    los ejemplos aparecen movimientos reales, baja VENTANA_DUPLICADOS_SEG.
+    """
+    _cachear(response)
+
+    crudo = _cargar(desde=fecha, con_repeticiones=True)
+    if fecha:
+        crudo = _del_dia(crudo, fecha)
+
+    if crudo.empty or "repeticion" not in crudo.columns:
+        return {
+            "ventana_segundos": VENTANA_DUPLICADOS_SEG,
+            "filas_totales": int(len(crudo)),
+            "repeticiones": 0,
+            "movimientos_reales": int(len(crudo)),
+            "por_chofer": [],
+            "ejemplos": [],
+        }
+
+    repes = crudo[crudo["repeticion"]]
+    total = int(len(crudo))
+    n_repes = int(len(repes))
+
+    # Cuantos movimientos de mas se le estaban contando a cada trabajador
+    por_chofer = [
+        {"nombre": _nombre(nombre), "movimientos_de_mas": int(cuenta)}
+        for nombre, cuenta in repes["chofer"].value_counts().items()
+    ]
+
+    # Un ejemplo por RACHA, no por fila. Cuando el sistema sube la misma unidad
+    # veinte veces, lo util es ver "VIN0012, 20 copias en 0 s", no diecinueve
+    # lineas identicas que tapan los demas casos.
+    muestras = []
+    if ejemplos and n_repes and "racha" in crudo.columns:
+        afectadas = crudo[crudo["racha"].isin(repes["racha"].unique())]
+
+        for _, grupo in afectadas.groupby("racha", sort=False):
+            grupo = grupo.sort_values("fecha", kind="stable")
+            primera, ultima = grupo.iloc[0], grupo.iloc[-1]
+            muestras.append(
+                {
+                    "chasis": primera["chasis"],
+                    "chofer": primera["chofer"],
+                    "isla": _texto(primera.get("isla")),
+                    "ubicacion": _texto(primera.get("ubicacion")),
+                    "copias": int(len(grupo)),
+                    "descartadas": int(len(grupo) - 1),
+                    "primera_marca": primera["fecha"].strftime("%d/%m/%Y %H:%M:%S.%f")[:-3],
+                    "ultima_marca": ultima["fecha"].strftime("%d/%m/%Y %H:%M:%S.%f")[:-3],
+                    "segundos_de_diferencia": round(
+                        (ultima["fecha"] - primera["fecha"]).total_seconds(), 2
+                    ),
+                }
+            )
+
+        # Primero las rachas mas escandalosas: confirman el bug de un vistazo.
+        muestras.sort(key=lambda m: m["copias"], reverse=True)
+        muestras = muestras[:ejemplos]
+
+    return {
+        "ventana_segundos": VENTANA_DUPLICADOS_SEG,
+        "filas_totales": total,
+        "repeticiones": n_repes,
+        "movimientos_reales": total - n_repes,
+        "porcentaje_inflado": round(n_repes / total * 100, 1) if total else 0,
+        "rachas_detectadas": int(repes["racha"].nunique()) if "racha" in repes else 0,
+        "por_chofer": por_chofer,
+        "ejemplos": muestras,
     }
 
 
@@ -364,7 +500,9 @@ def listar_choferes(response: Response):
 
     return [
         {
-            "nombre": fila.chofer,
+            "nombre": _nombre(fila.chofer),
+            "usuario": fila.chofer,
+            "personas": _personas(fila.chofer),
             "movimientos_historicos": int(fila.movimientos),
             "ultimo_movimiento": fila.ultimo.strftime("%d/%m/%Y %H:%M"),
         }

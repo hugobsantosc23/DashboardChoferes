@@ -65,6 +65,9 @@ function GraficoChoferes({ datos }) {
             <TooltipViz
               filas={(d) => [
                 { texto: `${d.movimientos} movimientos` },
+                ...(d.personas > 1
+                  ? [{ texto: `Cuenta de ${d.personas} personas · ${d.por_persona} c/u` }]
+                  : []),
                 { texto: `${d.unidades} unidades distintas` },
                 { texto: `De ${d.primero} a ${d.ultimo}` },
                 ...(d.por_hora ? [{ texto: `${d.por_hora} por hora` }] : []),
