@@ -89,6 +89,9 @@ function Dashboard({ modo, alternarModo }) {
 
   const kpis = resumen?.kpis;
   const porChofer = resumen?.por_chofer ?? [];
+
+  // Personas, no barras: PROTELANDTEMP es una sola barra pero son 4 choferes.
+  const personasActivas = porChofer.reduce((n, c) => n + (c.personas || 1), 0);
   const hoy = dayjs().startOf("day");
   const esHoy = fecha.isSame(hoy, "day");
 
@@ -289,9 +292,13 @@ function Dashboard({ modo, alternarModo }) {
               <CardContent>
                 <Encabezado
                   titulo="Movimientos por chofer"
-                  detalle={`${porChofer.length} ${
-                    porChofer.length === 1 ? "chofer" : "choferes"
-                  } con actividad`}
+                                    detalle={
+                    personasActivas === porChofer.length
+                      ? `${porChofer.length} ${
+                          porChofer.length === 1 ? "chofer" : "choferes"
+                        } con actividad`
+                      : `${personasActivas} choferes con actividad, en ${porChofer.length} cuentas`
+                  }
                   modo={modo}
                 />
                 <GraficoChoferes datos={porChofer} />
