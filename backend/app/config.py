@@ -58,7 +58,7 @@ USAR_CONSULTA_FILTRADA = _env("USAR_CONSULTA_FILTRADA", "false").lower() == "tru
 # Lista vacia = mostrar todos los usuarios que aparezcan en la hoja.
 CHOFERES_FILTRO = _env_lista(
     "CHOFERES_FILTRO",
-    "JFERNANDEZM,CVEGAL,PROTELANDTEMP,HSANTOSV,BRIVASL",
+    "JFERNANDEZM,CVEGAL,PROTELANDTEMP,HSANTOSV,BRIVASL,VGUZMAN",
 )
 
 ALMACEN = _env("ALMACEN", "VARI BIRRAK")
@@ -85,3 +85,14 @@ HORA_FIN = _env_int("HORA_FIN", 22)
 CORS_ORIGINS = [
     o for o in _env("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o
 ]
+
+
+NOMBRES_CHOFERES = {
+    "BRIVASL": "ANGELO",
+    "HSANTOSV": "HUGO RAUL",
+    "VGUZMAN": "GUZMAN",
+}
+
+CUENTAS_COMPARTIDAS = {
+    "PROTELANDTEMP": 4,
+}
