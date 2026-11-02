@@ -117,7 +117,8 @@ function Dashboard({ modo, alternarModo }) {
               Movimientos de unidades
             </Typography>
             <Typography sx={{ color: v.tintaSecundaria, fontSize: "0.85rem", mt: 0.5 }}>
-              {esHoy ? "Hoy" : fecha.format("dddd")} · {fecha.format("DD/MM/YYYY")}
+              {esHoy ? "Hoy" : fecha.locale("es").format("dddd")} ·{" "}
+              {fecha.format("DD/MM/YYYY")}
             </Typography>
           </Box>
 
@@ -150,7 +151,7 @@ function Dashboard({ modo, alternarModo }) {
             flexWrap: "wrap",
           }}
         >
-          <LocalizationProvider dateAdapter={AdapterDayjs}>
+          <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale="es">
             <DatePicker
               label="Fecha"
               value={fecha}
