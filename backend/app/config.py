@@ -98,6 +98,8 @@ NO_CUENTAN_SOLO_USUARIOS = _env_lista("NO_CUENTAN_SOLO_USUARIOS", "PROTELANDTEMP
 NOMBRES_CHOFERES = {
     "BRIVASL": "ANGELO",
     "HSANTOSV": "HUGO RAUL",
+    "PROTELANDTEMP": "PROTELANDTEMP(4 USUARIOS)",
+    "VGUZMAN": "GUZMAN",
 }
 
 # Cuentas que comparten varias personas. El dashboard lo indica para que
