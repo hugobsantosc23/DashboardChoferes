@@ -31,7 +31,7 @@ from app.config import (
     UBICACIONES_NO_CUENTAN,
     VENTANA_DUPLICADOS_SEG,
 )
-from app.revisiones import estado_revisiones, revisiones_de
+from app.revisiones import estado_revisiones, obtener_revisiones, revisiones_de
 from app.scraper import (
     clasificar_etapa,
     estado_cache,
@@ -354,22 +354,28 @@ def buscar_unidades(
     _cachear(response)
 
     aguja = texto.strip().upper()
-    df = _cargar()
+
+    # Sin el filtro de choferes: buscar una unidad no es medir produccion, y
+    # con el filtro puesto una unidad que solo movieron usuarios de fuera de
+    # la lista era invisible aunque estuviera en la hoja.
+    try:
+        df = solo_movimientos_reales(obtener_movimientos(filtrar_choferes=False))
+    except Exception as error:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"No se pudo leer la hoja de Google: {error}"
+        ) from error
 
     # regex=False: sin esto un parentesis o un corchete en la busqueda rompe
     # la expresion regular y devuelve un error 500.
     coincidencias = df[df["chasis"].str.contains(aguja, na=False, regex=False)]
 
-    if coincidencias.empty:
-        return {"resultados": [], "total": 0, "truncado": False}
-
     ultimas = (
         coincidencias.sort_values("fecha", ascending=False)
         .groupby("chasis", as_index=False)
         .first()
-        .sort_values("fecha", ascending=False)
+        if not coincidencias.empty
+        else coincidencias
     )
-    total = len(ultimas)
 
     resultados = [
         {
@@ -382,13 +388,47 @@ def buscar_unidades(
             "marca": _texto(fila.get("marca")),
             "cliente": _texto(fila.get("cliente")),
             "estado": _texto(fila.get("estado")),
-            "fecha": fila["fecha"].strftime("%d/%m/%Y %H:%M"),
+            "fecha": fila["fecha"],
+            "origen": "movimientos",
         }
-        for _, fila in ultimas.head(limite).iterrows()
+        for _, fila in ultimas.iterrows()
     ]
 
+    # Una unidad entregada por SUM y todavia sin mover solo existe en la hoja
+    # de revisiones. Sin esto el buscador decia "no se encontro" sobre una
+    # unidad que el usuario esta viendo en su hoja de calculo.
+    vistas = {r["chasis"] for r in resultados}
+    revs = obtener_revisiones()
+    if not revs.empty:
+        sueltas = revs[
+            revs["chasis"].str.contains(aguja, na=False, regex=False)
+            & ~revs["chasis"].isin(vistas)
+        ]
+        for _, fila in sueltas.sort_values("fecha").groupby("chasis").last().reset_index().iterrows():
+            resultados.append(
+                {
+                    "chasis": fila["chasis"],
+                    "chofer": _texto(fila.get("revisor")),
+                    "ubicacion": _texto(fila.get("ubicacion")),
+                    "isla": "-",
+                    "marca": _texto(fila.get("modelo")),
+                    "cliente": _texto(fila.get("concesionario")),
+                    "estado": "Pendiente de revisar"
+                    if fila.get("pendiente")
+                    else _texto(fila.get("resultado")),
+                    "fecha": fila["fecha"],
+                    "origen": "revisiones",
+                }
+            )
+
+    resultados.sort(key=lambda r: r["fecha"], reverse=True)
+    total = len(resultados)
+
+    for r in resultados:
+        r["fecha"] = r["fecha"].strftime("%d/%m/%Y %H:%M")
+
     return {
-        "resultados": resultados,
+        "resultados": resultados[:limite],
         "total": total,
         "truncado": total > limite,
     }
@@ -448,8 +488,6 @@ def flujo_unidad(response: Response, chasis: str):
     marcas = todo[(todo["chasis"] == vin) & (~todo.get("repeticion", False))]
     marcas = marcas.sort_values("fecha", kind="stable")
 
-    if marcas.empty:
-        raise HTTPException(404, f"El chasis {vin} no tiene movimientos registrados")
 
     # --- Un solo hilo de eventos con las dos hojas ---
     # La revision vive en otra hoja (el formulario de SUM/VARI) y se intercala
@@ -495,6 +533,7 @@ def flujo_unidad(response: Response, chasis: str):
             x for x in (str(rev.get("nro_entrega") or "").strip(),
                         str(rev.get("nro_revision") or "").strip()) if x
         )
+        pendiente = bool(rev.get("pendiente"))
         eventos.append(
             {
                 "fecha": rev["fecha"],
@@ -504,14 +543,31 @@ def flujo_unidad(response: Response, chasis: str):
                 "sitio": f"REV|{rev.get('nro_revision')}|{rev['fecha']}",
                 "lugar": str(rev.get("ubicacion") or "").strip(),
                 "quien": str(rev.get("revisor") or "").strip(),
-                "resultado": str(rev.get("resultado") or "").strip() or None,
+                "resultado": "Pendiente"
+                if pendiente
+                else (str(rev.get("resultado") or "").strip() or None),
                 "nota": " · ".join(
-                    x for x in (etiqueta, str(rev.get("observaciones") or "").strip())
+                    x
+                    for x in (
+                        etiqueta,
+                        "entregada por SUM, sin revisar todavia" if pendiente else "",
+                        str(rev.get("observaciones") or "").strip(),
+                    )
                     if x
                 )
                 or None,
             }
         )
+
+    if not eventos:
+        raise HTTPException(404, f"El chasis {vin} no aparece en ninguna de las hojas")
+
+    eventos.sort(key=lambda e: e["fecha"])
+
+    if not eventos:
+        raise HTTPException(404, f"El chasis {vin} no aparece en ninguna de las hojas")
+
+    eventos.sort(key=lambda e: e["fecha"])
 
     eventos.sort(key=lambda e: e["fecha"])
 
@@ -573,16 +629,27 @@ def flujo_unidad(response: Response, chasis: str):
             }
         )
 
-    primera, ultima = pasos[0]["_desde"], pasos[-1]["_hasta"]
+        primera, ultima = pasos[0]["_desde"], pasos[-1]["_hasta"]
     vistas = {p["etapa"] for p in pasos}
-    ultimo = marcas.iloc[-1]
+
+    # Una unidad puede estar solo en la hoja de revisiones (entregada por SUM
+    # y aun sin mover), asi que la ficha se arma de la hoja que tenga datos.
+    ultimo = marcas.iloc[-1] if not marcas.empty else None
+    ultima_rev = revisiones.iloc[-1] if not revisiones.empty else None
+
+    def _ficha(campo_mov: str, campo_rev: str | None = None) -> str:
+        if ultimo is not None and _texto(ultimo.get(campo_mov)) != "-":
+            return _texto(ultimo.get(campo_mov))
+        if ultima_rev is not None and campo_rev:
+            return _texto(ultima_rev.get(campo_rev))
+        return "-"
 
     return {
         "chasis": vin,
-        "marca": _texto(ultimo.get("marca")),
-        "tipo": _texto(ultimo.get("tipo")),
-        "cliente": _texto(ultimo.get("cliente")),
-        "estado": _texto(ultimo.get("estado")),
+        "marca": _ficha("marca", "modelo"),
+        "tipo": _ficha("tipo"),
+        "cliente": _ficha("cliente", "concesionario"),
+        "estado": _ficha("estado"),
         "marcas_totales": int(len(marcas)),
         "paradas": len(pasos),
         "revisiones": int(len(revisiones)),

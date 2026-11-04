@@ -101,21 +101,33 @@ def _procesar(texto_csv: str) -> pd.DataFrame:
         if columna in df.columns:
             df[columna] = df[columna].fillna("").astype(str).str.strip()
 
-    df["chasis"] = df["chasis"].str.upper()
+        df["chasis"] = df["chasis"].str.upper()
 
     # Las fechas vienen como d/m/yyyy H:MM:SS. dayfirst es obligatorio: sin el,
     # "6/3/2026" se leeria como 3 de junio en vez de 6 de marzo.
-    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce", dayfirst=True)
+    revisada_en = pd.to_datetime(df["fecha"], errors="coerce", dayfirst=True)
+    entregada_en = pd.to_datetime(df["entrega_sum"], errors="coerce", dayfirst=True)
 
-    # Sin fecha o sin chasis no sirve para el recorrido. Esto tambien se lleva
-    # por delante la fila de encabezado que gviz pueda colar como dato.
+    # Una entrega sin Fecha Revision no es basura: es una unidad que SUM ya
+    # entrego y VARI todavia no ha revisado. Tirarla hacia desaparecer del
+    # dashboard unidades que estan esperando revision, que es justo cuando
+    # uno quiere buscarlas. Se usa la fecha de entrega y se marca pendiente.
+    df["pendiente"] = revisada_en.isna()
+    df["fecha"] = revisada_en.fillna(entregada_en)
+    df["entrega_sum"] = entregada_en
+
+    # Sin fecha de ningun tipo o sin chasis no se puede situar en el recorrido.
+    # Esto tambien se lleva por delante la fila de encabezado que gviz pueda
+    # colar como dato.
     df = df[df["fecha"].notna() & (df["chasis"].str.len() > 0)]
 
     df["ubicacion"] = df["ubicacion"].map(_limpiar_ubicacion)
 
     df = df.sort_values("fecha").reset_index(drop=True)
-    logger.info("Hoja de revisiones: %d revisiones de %d unidades",
-                len(df), df["chasis"].nunique())
+    logger.info(
+        "Hoja de revisiones: %d registros de %d unidades (%d pendientes de revisar)",
+        len(df), df["chasis"].nunique(), int(df["pendiente"].sum()),
+    )
     return df
 
 
