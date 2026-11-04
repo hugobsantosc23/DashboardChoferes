@@ -79,14 +79,25 @@ function Busqueda() {
     setFlujo(null);
     setVista("flujo");
     try {
-      // Las dos de golpe: el flujo es la vista por defecto y el detalle lo
+            // Las dos de golpe: el flujo es la vista por defecto y el detalle lo
       // pide el mismo clic, asi que cambiar de pestana no espera a la red.
-      const [resFlujo, resHistorial] = await Promise.all([
+      //
+      // allSettled y no all: el detalle es opcional. Con `all`, que fallara
+      // la lista de movimientos cerraba el dialogo entero y la unidad no se
+      // podia ver, aunque su recorrido estuviera perfectamente.
+      const [resFlujo, resHistorial] = await Promise.allSettled([
         api.get(ENDPOINTS.flujo(chasis)),
         api.get(ENDPOINTS.historial(chasis)),
       ]);
-      setFlujo(resFlujo.data);
-      setHistorial(resHistorial.data);
+
+      if (resFlujo.status === "rejected") throw resFlujo.reason;
+
+      setFlujo(resFlujo.value.data);
+      setHistorial(
+        resHistorial.status === "fulfilled"
+          ? resHistorial.value.data
+          : { chasis, movimientos: [], total_movimientos: 0 }
+      );
     } catch (e) {
       setError(mensajeDeError(e));
       cerrarDialogo();
@@ -239,8 +250,13 @@ function Busqueda() {
             <Box sx={{ py: 4, textAlign: "center" }}>
               <CircularProgress size={28} />
             </Box>
-          ) : vista === "flujo" && flujo ? (
+                    ) : vista === "flujo" && flujo ? (
             <LineaDeTiempo flujo={flujo} />
+          ) : !historial?.movimientos?.length ? (
+            <Typography sx={{ py: 3, textAlign: "center", color: v.tintaSuave }}>
+              Esta unidad todavía no tiene movimientos en el almacén. Mira la
+              pestaña «Flujo» para ver sus entregas y revisiones.
+            </Typography>
           ) : (
             <Table size="small">
               <TableHead>

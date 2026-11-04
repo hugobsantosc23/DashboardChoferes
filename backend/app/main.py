@@ -439,11 +439,35 @@ def historial_unidad(response: Response, chasis: str):
     _cachear(response)
 
     vin = chasis.strip().upper()
-    df = _cargar()
+
+    # Sin filtro de choferes, igual que /buscar y /flujo: si el buscador
+    # devuelve una unidad, abrirla no puede dar 404 porque quien la movio no
+    # este en la lista de produccion.
+    try:
+        df = solo_movimientos_reales(obtener_movimientos(filtrar_choferes=False))
+    except Exception as error:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"No se pudo leer la hoja de Google: {error}"
+        ) from error
+
     movimientos = df[df["chasis"] == vin].sort_values("fecha", ascending=False)
 
+    # Una unidad entregada por SUM y aun sin mover existe, pero no tiene
+    # movimientos: la lista vacia es la respuesta correcta y el 404 haria que
+    # el dialogo del frontend fallase sobre una unidad real. Un chasis que no
+    # esta en ninguna de las dos hojas si es un 404.
     if movimientos.empty:
-        raise HTTPException(404, f"El chasis {vin} no tiene movimientos registrados")
+        if revisiones_de(vin).empty:
+            raise HTTPException(
+                404, f"El chasis {vin} no aparece en ninguna de las hojas"
+            )
+        return {
+            "chasis": vin,
+            "total_movimientos": 0,
+            "marca": "-",
+            "cliente": "-",
+            "movimientos": [],
+        }
 
     return {
         "chasis": vin,
