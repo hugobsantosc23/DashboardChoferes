@@ -10,6 +10,17 @@ from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import (
+    ALMACEN,
+    CDN_CACHE_SEGUNDOS,
+    CDN_STALE_SEGUNDOS,
+    CHOFERES_FILTRO,
+    CORS_ORIGINS,
+    HORA_FIN,
+    HORA_INICIO,
+    USAR_CONSULTA_FILTRADA,
+    ZONA_HORARIA,
+)
+from app.config import (
     CUENTAS_COMPARTIDAS,
     ETAPA_FINAL,
     ETAPAS_DE_UN_TRAMO,
@@ -20,15 +31,7 @@ from app.config import (
     UBICACIONES_NO_CUENTAN,
     VENTANA_DUPLICADOS_SEG,
 )
-from app.config import (
-    CUENTAS_COMPARTIDAS,
-    NOMBRES_CHOFERES,
-    NO_CUENTAN_SOLO_USUARIOS,
-    UBICACIONES_NO_CUENTAN,
-    VENTANA_DUPLICADOS_SEG,
-)
 from app.revisiones import estado_revisiones, revisiones_de
-
 from app.scraper import (
     clasificar_etapa,
     estado_cache,
