@@ -258,34 +258,6 @@ function Dashboard({ modo, alternarModo }) {
               <TarjetaKpi etiqueta="Hora pico" valor={kpis?.hora_pico ?? "–"} />
             </Box>
             
-                        {/* El sistema VARI sube la misma unidad varias veces con la misma
-                hora. Se descartan, pero se dice cuantas: si no, el total no
-                cuadra con lo que muestra el sistema y nadie se fia de el. */}
-            {(kpis?.duplicados_descartados > 0 ||
-              kpis?.aprobaciones_descartadas > 0) && (
-              <Typography
-                sx={{ mt: -1, mb: 3, fontSize: "0.75rem", color: v.tintaSuave }}
-              >
-                No se contaron{" "}
-                {[
-                  kpis.duplicados_descartados > 0 &&
-                    `${kpis.duplicados_descartados} ${
-                      kpis.duplicados_descartados === 1 ? "registro repetido" : "registros repetidos"
-                    } del sistema`,
-                  kpis.aprobaciones_descartadas > 0 &&
-                    `${kpis.aprobaciones_descartadas} ${
-                      kpis.aprobaciones_descartadas === 1 ? "aprobación" : "aprobaciones"
-                    } en isla`,
-                ]
-                  .filter(Boolean)
-                  .join(" ni ")}
-                . El sistema mostraría{" "}
-                {kpis.total +
-                  (kpis.duplicados_descartados || 0) +
-                  (kpis.aprobaciones_descartadas || 0)}
-                .
-              </Typography>
-            )}
 
             {/* ---------- Movimientos por chofer ---------- */}
             <Card sx={{ mb: 2 }}>

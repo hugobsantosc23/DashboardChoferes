@@ -87,8 +87,7 @@ function TablaChoferes({ datos }) {
 
       <Typography sx={{ mt: 1, fontSize: "0.7rem", color: v.tintaSuave }}>
         «Unidades» cuenta chasis distintos: un mismo vehículo movido dos veces
-        suma dos movimientos y una unidad. Dejar un vehículo en una isla de
-        aprobados no cuenta como movimiento.
+        suma dos movimientos y una unidad.
         {!esMovil &&
           " «Por hora» es el ritmo entre el primer y el último registro del día."}
       </Typography>
