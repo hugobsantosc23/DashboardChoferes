@@ -20,6 +20,8 @@ from app.config import (
     CACHE_TTL,
     CHOFERES_FILTRO,
     COLUMNA_FECHA_GVIZ,
+    ETAPA_POR_DEFECTO,
+    ETAPAS_FLUJO,
     EXPORT_URL,
     GVIZ_URL,
     NO_CUENTAN_SOLO_USUARIOS,
@@ -198,7 +200,27 @@ def marcar_no_movimientos(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _procesar(texto_csv: str) -> pd.DataFrame:
+_ETAPAS_COMPILADAS = tuple(
+    (re.compile(patron, re.IGNORECASE), etapa) for patron, etapa in ETAPAS_FLUJO
+)
+
+
+def clasificar_etapa(isla: object, ubicacion: object) -> str:
+    """En que etapa del recorrido cae una marca.
+
+    Se mira la isla y la ubicacion juntas porque la hoja no es consistente:
+    en las zonas con nombre ("COLA DE LAVADO SUM") las dos columnas traen lo
+    mismo, pero en una isla normal la isla dice "ISLA 24" y la ubicacion la
+    fila y el numero ("4 - D").
+    """
+    texto = f"{isla or ''} {ubicacion or ''}"
+    for patron, etapa in _ETAPAS_COMPILADAS:
+        if patron.search(texto):
+            return etapa
+    return ETAPA_POR_DEFECTO
+
+
+def _procesar(texto_csv: str, filtrar_choferes: bool = True) -> pd.DataFrame:
     df = pd.read_csv(io.StringIO(texto_csv), dtype=str)
     filas_crudas = len(df)
 
@@ -231,7 +253,10 @@ def _procesar(texto_csv: str) -> pd.DataFrame:
     df = df[~df["chofer"].isin(VACIOS)]
     df = df[~df["chasis"].isin(VACIOS)]
 
-    if CHOFERES_FILTRO:
+        # El filtro mide produccion, asi que solo aplica a los endpoints que
+    # cuentan movimientos. El recorrido de una unidad lo tocan tambien
+    # usuarios de fuera de la lista y sin ellos sale con huecos.
+    if filtrar_choferes and CHOFERES_FILTRO:
         df = df[df["chofer"].isin(CHOFERES_FILTRO)]
 
     df = df.sort_values("fecha").reset_index(drop=True)
@@ -278,12 +303,22 @@ def solo_movimientos_reales(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def obtener_movimientos(
-    desde: date | None = None, force_refresh: bool = False
+    desde: date | None = None,
+    force_refresh: bool = False,
+    filtrar_choferes: bool = True,
 ) -> pd.DataFrame:
-    """Devuelve los movimientos normalizados, usando cache en memoria."""
+    """Devuelve los movimientos normalizados, usando cache en memoria.
+
+    Con `filtrar_choferes=False` vienen todos los usuarios de la hoja, no solo
+    los de CHOFERES_FILTRO. Hace falta para seguir el recorrido completo de una
+    unidad, que pasa por manos de gente fuera de la lista de produccion.
+    """
     global _ultimo_error
 
-    clave = f"desde={desde.isoformat() if desde else 'todo'}"
+    clave = (
+        f"desde={desde.isoformat() if desde else 'todo'}"
+        f"|choferes={'filtrados' if filtrar_choferes else 'todos'}"
+    )
     ahora = datetime.now()
 
     if not force_refresh and clave in _cache:
@@ -300,6 +335,7 @@ def obtener_movimientos(
         respuesta = requests.get(url, timeout=TIMEOUT_DESCARGA)
         respuesta.raise_for_status()
 
+        df = _procesar(respuesta.text, filtrar_choferes=filtrar_choferes)
         df = _procesar(respuesta.text)
 
         _cache[clave] = (df.copy(), ahora)

@@ -10,15 +10,15 @@ from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import (
-    ALMACEN,
-    CDN_CACHE_SEGUNDOS,
-    CDN_STALE_SEGUNDOS,
-    CHOFERES_FILTRO,
-    CORS_ORIGINS,
-    HORA_FIN,
-    HORA_INICIO,
-    USAR_CONSULTA_FILTRADA,
-    ZONA_HORARIA,
+    CUENTAS_COMPARTIDAS,
+    ETAPA_FINAL,
+    ETAPAS_DE_UN_TRAMO,
+    NOMBRES_CHOFERES,
+    NO_CUENTAN_SOLO_USUARIOS,
+    ORDEN_ETAPAS,
+    TITULOS_ETAPA,
+    UBICACIONES_NO_CUENTAN,
+    VENTANA_DUPLICADOS_SEG,
 )
 from app.config import (
     CUENTAS_COMPARTIDAS,
@@ -27,7 +27,14 @@ from app.config import (
     UBICACIONES_NO_CUENTAN,
     VENTANA_DUPLICADOS_SEG,
 )
-from app.scraper import estado_cache, obtener_movimientos, solo_movimientos_reales
+from app.revisiones import estado_revisiones, revisiones_de
+
+from app.scraper import (
+    clasificar_etapa,
+    estado_cache,
+    obtener_movimientos,
+    solo_movimientos_reales,
+)
 
 app = FastAPI(
     title="Dashboard de Movimientos",
@@ -101,6 +108,20 @@ def _personas(usuario: object) -> int:
     """Cuantas personas comparten esa cuenta. 1 si no es compartida."""
     return CUENTAS_COMPARTIDAS.get(str(usuario or "").strip().upper(), 1)
 
+def _duracion(segundos: float) -> str:
+    """Segundos a algo legible: '45 min', '3 h 20 min', '2 dias 4 h'."""
+    segundos = max(0, int(segundos))
+    dias, resto = divmod(segundos, 86400)
+    horas, resto = divmod(resto, 3600)
+    minutos = resto // 60
+
+    if dias:
+        return f"{dias} dia{'s' if dias > 1 else ''}" + (f" {horas} h" if horas else "")
+    if horas:
+        return f"{horas} h" + (f" {minutos} min" if minutos else "")
+    if minutos:
+        return f"{minutos} min"
+    return f"{segundos} s"
 
 def _texto(valor: object, defecto: str = "-") -> str:
     if valor is None or (isinstance(valor, float) and pd.isna(valor)):
@@ -142,6 +163,7 @@ def health():
                 "hasta": df["fecha"].max().isoformat() if not df.empty else None,
             },
             "choferes_configurados": CHOFERES_FILTRO or "todos",
+            "revisiones": estado_revisiones(),
             "cache": estado_cache(),
             "hora_servidor": datetime.now(TZ).isoformat(timespec="seconds"),
         }
@@ -397,6 +419,190 @@ def historial_unidad(response: Response, chasis: str):
         ],
     }
 
+@app.get("/api/unidades/{chasis}/flujo")
+def flujo_unidad(response: Response, chasis: str):
+    """El recorrido de una unidad por el almacen, agrupado por etapas.
+
+    A diferencia de /historial, esto lee la hoja SIN el filtro de choferes: el
+    recorrido lo tocan tambien usuarios que no miden produccion (los que meten
+    la unidad a la cola de lavado SUM, por ejemplo) y sin ellos el flujo sale
+    con huecos que parecen tiempo muerto.
+    """
+    _cachear(response)
+
+    vin = chasis.strip().upper()
+
+    try:
+        todo = obtener_movimientos(filtrar_choferes=False)
+    except Exception as error:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail=f"No se pudo leer la hoja de Google: {error}"
+        ) from error
+
+    # Las repeticiones del sistema se quitan: son la misma marca subida dos
+    # veces, no una parada mas del recorrido. Las aprobaciones SI se dejan,
+    # porque aqui no se esta midiendo produccion sino por donde paso la unidad.
+    marcas = todo[(todo["chasis"] == vin) & (~todo.get("repeticion", False))]
+    marcas = marcas.sort_values("fecha", kind="stable")
+
+    if marcas.empty:
+        raise HTTPException(404, f"El chasis {vin} no tiene movimientos registrados")
+
+    # --- Un solo hilo de eventos con las dos hojas ---
+    # La revision vive en otra hoja (el formulario de SUM/VARI) y se intercala
+    # por hora: en los datos reales la marca de "ISLA n - APROBADOS" cae al
+    # minuto siguiente de la revision, asi que sin mezclarlas el recorrido
+    # cuenta el final sin el principio.
+    eventos = []
+    for _, fila in marcas.iterrows():
+        etapa = clasificar_etapa(fila.get("isla"), fila.get("ubicacion"))
+        lugar = _texto(fila.get("ubicacion"), "")
+        isla = _texto(fila.get("isla"), "")
+        # En una isla la ubicacion es la fila y el numero, que sin la isla no
+        # dice nada; en una zona con nombre las dos columnas repiten lo mismo.
+        completo = lugar if lugar == isla or not isla else f"{isla} · {lugar}"
+        eventos.append(
+            {
+                "fecha": fila["fecha"],
+                "etapa": etapa,
+                "sitio": "" if etapa in ETAPAS_DE_UN_TRAMO else f"{isla}|{lugar}",
+                "lugar": completo,
+                "quien": _nombre(fila.get("chofer")),
+                "resultado": None,
+                "nota": None,
+            }
+        )
+
+    # Si la hoja de revisiones no se pudo leer, no se puede afirmar que la
+    # unidad no paso por revision: solo que no se sabe.
+    estado_rev = estado_revisiones()
+    hay_revisiones = bool(
+        estado_rev.get("activo")
+        and not estado_rev.get("ultimo_error")
+        and estado_rev.get("revisiones", 0)
+    )
+
+    revisiones = revisiones_de(vin)
+    for _, rev in revisiones.iterrows():
+        # La entrega de SUM NO se pone como evento aparte: su fecha es la de
+        # envio del formulario y a veces cae DESPUES de la revision que
+        # describe (se han visto 7 horas), asi que como paso propio
+        # desordenaria la linea de tiempo. Va como dato de la revision.
+        etiqueta = " · ".join(
+            x for x in (str(rev.get("nro_entrega") or "").strip(),
+                        str(rev.get("nro_revision") or "").strip()) if x
+        )
+        eventos.append(
+            {
+                "fecha": rev["fecha"],
+                "etapa": "REVISION",
+                # Cada revision es una parada propia: una unidad rechazada se
+                # vuelve a revisar y las dos pasadas tienen que verse.
+                "sitio": f"REV|{rev.get('nro_revision')}|{rev['fecha']}",
+                "lugar": str(rev.get("ubicacion") or "").strip(),
+                "quien": str(rev.get("revisor") or "").strip(),
+                "resultado": str(rev.get("resultado") or "").strip() or None,
+                "nota": " · ".join(
+                    x for x in (etiqueta, str(rev.get("observaciones") or "").strip())
+                    if x
+                )
+                or None,
+            }
+        )
+
+    eventos.sort(key=lambda e: e["fecha"])
+
+    # --- Agrupar eventos consecutivos en paradas ---
+    # Una parada nueva empieza cuando cambia el sitio exacto, isla Y fila: un
+    # reacomodo de la fila 4-D a la 7-B de la misma isla es un movimiento real
+    # y tiene que verse. Lo que si se funde son las marcas repetidas sobre el
+    # mismo sitio, y los tramos de lavado, que pasan por tres ubicaciones con
+    # nombre distinto pero son una sola etapa.
+    pasos: list[dict] = []
+    for ev in eventos:
+        if pasos and pasos[-1]["etapa"] == ev["etapa"] and pasos[-1]["_sitio"] == ev["sitio"]:
+            paso = pasos[-1]
+        else:
+            paso = {
+                "etapa": ev["etapa"],
+                "titulo": TITULOS_ETAPA.get(ev["etapa"], ev["etapa"]),
+                "_sitio": ev["sitio"],
+                "_desde": ev["fecha"],
+                "_hasta": ev["fecha"],
+                "marcas": 0,
+                "_lugares": [],
+                "_choferes": [],
+                "resultado": ev["resultado"],
+                "nota": ev["nota"],
+            }
+            pasos.append(paso)
+
+        paso["_hasta"] = ev["fecha"]
+        paso["marcas"] += 1
+
+        if ev["lugar"] and ev["lugar"] not in paso["_lugares"]:
+            paso["_lugares"].append(ev["lugar"])
+        if ev["quien"] and ev["quien"] not in paso["_choferes"]:
+            paso["_choferes"].append(ev["quien"])
+
+    ahora = datetime.now(TZ).replace(tzinfo=None)
+
+    salida = []
+    for i, paso in enumerate(pasos):
+        # Cuanto estuvo la unidad en esa parada: desde que llego hasta que la
+        # movieron. En la ultima parada, hasta ahora mismo.
+        fin = pasos[i + 1]["_desde"] if i + 1 < len(pasos) else ahora
+        salida.append(
+            {
+                "orden": i + 1,
+                "etapa": paso["etapa"],
+                "titulo": paso["titulo"],
+                "lugar": " → ".join(paso["_lugares"]),
+                "ubicaciones": paso["_lugares"],
+                "desde": paso["_desde"].strftime("%d/%m/%Y %H:%M"),
+                "hasta": paso["_hasta"].strftime("%d/%m/%Y %H:%M"),
+                "marcas": paso["marcas"],
+                "choferes": paso["_choferes"],
+                "permanencia": _duracion((fin - paso["_desde"]).total_seconds()),
+                "en_curso": i + 1 == len(pasos),
+                "resultado": paso["resultado"],
+                "nota": paso["nota"],
+            }
+        )
+
+    primera, ultima = pasos[0]["_desde"], pasos[-1]["_hasta"]
+    vistas = {p["etapa"] for p in pasos}
+    ultimo = marcas.iloc[-1]
+
+    return {
+        "chasis": vin,
+        "marca": _texto(ultimo.get("marca")),
+        "tipo": _texto(ultimo.get("tipo")),
+        "cliente": _texto(ultimo.get("cliente")),
+        "estado": _texto(ultimo.get("estado")),
+        "marcas_totales": int(len(marcas)),
+        "paradas": len(pasos),
+        "revisiones": int(len(revisiones)),
+        "rechazos": int(
+            (revisiones["resultado"].str.upper() == "RECHAZADO").sum()
+        )
+        if not revisiones.empty
+        else 0,
+        "primera_marca": primera.strftime("%d/%m/%Y %H:%M"),
+        "ultima_marca": ultima.strftime("%d/%m/%Y %H:%M"),
+        "tiempo_en_almacen": _duracion((ahora - primera).total_seconds()),
+        "ubicacion_actual": salida[-1]["lugar"],
+        # Lo normal es que una unidad termine en despacho. Cuando no, conviene
+        # que salte a la vista en vez de tener que leer toda la linea.
+        "cerrado_en_despacho": pasos[-1]["etapa"] == ETAPA_FINAL,
+        "revision_disponible": hay_revisiones,
+        "etapas_sin_pasar": [
+            TITULOS_ETAPA.get(e, e)
+            for e in ORDEN_ETAPAS
+            if e not in vistas and (e != "REVISION" or hay_revisiones)
+        ],
+        "pasos": salida,
+    }
 
 # --------------------------------------------------------------------------
 # Duplicados del sistema

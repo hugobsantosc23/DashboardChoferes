@@ -17,6 +17,8 @@ import {
   TableHead,
   TableRow,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
   useMediaQuery,
   useTheme,
@@ -26,6 +28,7 @@ import SearchIcon from "@mui/icons-material/Search";
 
 import { ENDPOINTS, api, mensajeDeError } from "../api";
 import { VIZ } from "../tema";
+import LineaDeTiempo from "../components/LineaDeTiempo";
 
 function Busqueda() {
   const theme = useTheme();
@@ -38,6 +41,8 @@ function Busqueda() {
   const [error, setError] = useState(null);
 
   const [historial, setHistorial] = useState(null);
+  const [flujo, setFlujo] = useState(null);
+  const [vista, setVista] = useState("flujo");
   const [cargandoHistorial, setCargandoHistorial] = useState(false);
 
   const buscar = async () => {
@@ -62,15 +67,29 @@ function Busqueda() {
     }
   };
 
+    const cerrarDialogo = () => {
+    setHistorial(null);
+    setFlujo(null);
+    setVista("flujo");
+  };
+
   const verHistorial = async (chasis) => {
     setCargandoHistorial(true);
     setHistorial({ chasis, movimientos: [] });
+    setFlujo(null);
+    setVista("flujo");
     try {
-      const { data } = await api.get(ENDPOINTS.historial(chasis));
-      setHistorial(data);
+      // Las dos de golpe: el flujo es la vista por defecto y el detalle lo
+      // pide el mismo clic, asi que cambiar de pestana no espera a la red.
+      const [resFlujo, resHistorial] = await Promise.all([
+        api.get(ENDPOINTS.flujo(chasis)),
+        api.get(ENDPOINTS.historial(chasis)),
+      ]);
+      setFlujo(resFlujo.data);
+      setHistorial(resHistorial.data);
     } catch (e) {
       setError(mensajeDeError(e));
-      setHistorial(null);
+      cerrarDialogo();
     } finally {
       setCargandoHistorial(false);
     }
@@ -178,7 +197,7 @@ function Busqueda() {
 
       <Dialog
         open={Boolean(historial)}
-        onClose={() => setHistorial(null)}
+        cerrarDialogo
         fullWidth
         maxWidth="sm"
         fullScreen={esMovil}
@@ -195,18 +214,33 @@ function Busqueda() {
             </Typography>
           )}
           <IconButton
-            onClick={() => setHistorial(null)}
+            cerrarDialogo
             sx={{ position: "absolute", right: 8, top: 8 }}
             aria-label="Cerrar"
           >
             <CloseIcon />
           </IconButton>
         </DialogTitle>
-        <DialogContent dividers>
+                <DialogContent dividers>
+          {!cargandoHistorial && flujo && (
+            <ToggleButtonGroup
+              exclusive
+              size="small"
+              value={vista}
+              onChange={(_, nueva) => nueva && setVista(nueva)}
+              sx={{ mb: 2 }}
+            >
+              <ToggleButton value="flujo">Flujo</ToggleButton>
+              <ToggleButton value="detalle">Detalle</ToggleButton>
+            </ToggleButtonGroup>
+          )}
+
           {cargandoHistorial ? (
             <Box sx={{ py: 4, textAlign: "center" }}>
               <CircularProgress size={28} />
             </Box>
+          ) : vista === "flujo" && flujo ? (
+            <LineaDeTiempo flujo={flujo} />
           ) : (
             <Table size="small">
               <TableHead>

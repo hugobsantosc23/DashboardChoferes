@@ -115,6 +115,77 @@ CHOFERES_FILTRO = _env_lista(
     "JFERNANDEZM,CVEGAL,PROTELANDTEMP,HSANTOSV,BRIVASL,VGUZMAN",
 )
 
+# --- Hoja de revisiones de VARI -------------------------------------------
+# Otra hoja distinta: la del formulario con el que SUM entrega unidades y VARI
+# las revisa. Se usa solo para intercalar la revision en el recorrido.
+SHEET_REVISIONES_ID = _env(
+    "SHEET_REVISIONES_ID", "1DVgDOSHEI1w69BvPWy1YdOHnShik8UtzR6Wf8_f62-k"
+)
+SHEET_REVISIONES_GID = _env("SHEET_REVISIONES_GID", "414852562")
+
+# La hoja pesa unos 21 MB porque cada revision arrastra hasta 16 URLs de
+# fotos. Se piden solo estas columnas con una consulta gviz; bajarla entera
+# se comeria el timeout en cada arranque en frio.
+#
+#   A  Submission Date        P  Nro de Entrega     S  Aceptacion / Rechazo
+#   B  Chasis                 Q  Nro Revision       T  Observaciones
+#   C  Concesionario          R  Fecha Revision     AE Revisado por
+#   D  Modelo                 F  Ubicacion
+#
+# Las dos listas van en paralelo: la columna N de REVISIONES_COLUMNAS se
+# llamara como el nombre N de REVISIONES_NOMBRES. Si cambias una, cambia la
+# otra.
+REVISIONES_COLUMNAS = _env("REVISIONES_COLUMNAS", "A,B,C,D,F,P,Q,R,S,T,AE")
+REVISIONES_NOMBRES = _env(
+    "REVISIONES_NOMBRES",
+    "entrega_sum,chasis,concesionario,modelo,ubicacion,"
+    "nro_entrega,nro_revision,fecha,resultado,observaciones,revisor",
+)
+
+# La hoja tiene dos filas de encabezado: la primera agrupa "...por parte de
+# SUM" y "Revision por parte de VARI", la segunda son los nombres de verdad.
+REVISIONES_FILAS_ENCABEZADO = _env_int("REVISIONES_FILAS_ENCABEZADO", 2)
+
+# Apagalo si la hoja deja de estar compartida: el recorrido sigue saliendo,
+# solo que sin el tramo de revision.
+REVISIONES_ACTIVO = _env("REVISIONES_ACTIVO", "true").lower() == "true"
+
+# --- Flujo de una unidad --------------------------------------------------
+# Cada marca de la hoja se clasifica en una etapa del recorrido. Se prueba en
+# ESTE orden y gana la primera que case, asi que lo especifico va antes que lo
+# general ("ISLA 20 - APROBADOS" antes que "ISLA 20").
+ETAPAS_FLUJO = (
+    (r"ZONA\s*DESPACHO", "DESPACHO"),
+    (r"LAVADO\s*VARI", "LAVADO_VARI"),
+    (r"PICKING\s*LAVADO|ZONA\s*ACOPIO|COLA\s*DE\s*LAVADO\s*SUM", "LAVADO_SUM"),
+    (r"ISLA\s*\d+\s*-\s*APROBADO", "APROBADO"),
+    (r"REVISI[OÓ]N", "REVISION"),
+    (r"^\s*(ISLA|P|C)\s*\d+", "ISLA"),
+)
+ETAPA_POR_DEFECTO = "OTRO"
+
+TITULOS_ETAPA = {
+    "LAVADO_SUM": "Cola de lavado SUM",
+    "REVISION": "Zona de revision",
+    "APROBADO": "Aprobado por inspeccion",
+    "ISLA": "Estacionado en isla",
+    "LAVADO_VARI": "Lavado VARI",
+    "DESPACHO": "Zona de despacho",
+    "OTRO": "Otro punto del almacen",
+}
+
+# Etapas que son un solo tramo aunque pasen por varias ubicaciones: el lavado
+# SUM son tres marcas seguidas (picking -> acopio -> cola) y el de VARI otras
+# tres (cola -> en proceso -> finalizado). Mostrarlas sueltas llena la linea
+# de tiempo de pasos que no son paradas distintas.
+ETAPAS_DE_UN_TRAMO = {"LAVADO_SUM", "LAVADO_VARI"}
+
+# Recorrido esperado, para avisar de lo que no paso.
+ORDEN_ETAPAS = (
+    "LAVADO_SUM", "REVISION", "APROBADO", "ISLA", "LAVADO_VARI", "DESPACHO"
+)
+ETAPA_FINAL = "DESPACHO"
+
 ALMACEN = _env("ALMACEN", "VARI BIRRAK")
 
 # --- Rendimiento ----------------------------------------------------------
