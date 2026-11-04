@@ -195,9 +195,9 @@ function Busqueda() {
         </CardContent>
       </Card>
 
-      <Dialog
+                  <Dialog
         open={Boolean(historial)}
-        cerrarDialogo
+        onClose={cerrarDialogo}
         fullWidth
         maxWidth="sm"
         fullScreen={esMovil}
@@ -214,7 +214,7 @@ function Busqueda() {
             </Typography>
           )}
           <IconButton
-            cerrarDialogo
+            onClick={cerrarDialogo}
             sx={{ position: "absolute", right: 8, top: 8 }}
             aria-label="Cerrar"
           >

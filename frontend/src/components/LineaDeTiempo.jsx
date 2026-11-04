@@ -19,7 +19,7 @@ function LineaDeTiempo({ flujo }) {
   const esMovil = useMediaQuery(theme.breakpoints.down("sm"));
   const v = VIZ[theme.palette.mode];
 
-  const pasos = flujo?.pasos ?? [];
+  const pasos = [...(flujo?.pasos ?? [])].reverse();
   if (!pasos.length) return null;
 
   return (
@@ -47,11 +47,8 @@ function LineaDeTiempo({ flujo }) {
 
       {!flujo.cerrado_en_despacho && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          Esta unidad no terminó en zona de despacho. Sigue en{" "}
-          <strong>{flujo.ubicacion_actual}</strong>
-          {flujo.etapas_sin_pasar?.length > 0 && (
-            <> · no pasó por: {flujo.etapas_sin_pasar.join(", ")}</>
-          )}
+                    Última ubicación en{" "}
+          <strong>{flujo.ubicacion_actual}</strong>.
         </Alert>
       )}
 
@@ -70,14 +67,17 @@ function LineaDeTiempo({ flujo }) {
           }}
         />
 
-        {pasos.map((p) => {
+                {pasos.map((p, i) => {
           const esDespacho = p.etapa === "DESPACHO";
           const esOtro = p.etapa === "OTRO";
           const rechazado = p.resultado?.toUpperCase() === "RECHAZADO";
           return (
             <Box
               key={p.orden}
-              sx={{ display: "flex", gap: 1.5, pb: p.orden === pasos.length ? 0 : 2.5 }}
+              // El relleno va por posicion en pantalla, no por el numero de
+              // paso: la lista esta invertida y el ultimo de la pantalla es
+              // el paso 1.
+              sx={{ display: "flex", gap: 1.5, pb: i === pasos.length - 1 ? 0 : 2.5 }}
             >
               <Box sx={{ width: CARRIL, flexShrink: 0, pt: "3px" }}>
                 <Box
