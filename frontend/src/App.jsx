@@ -39,7 +39,7 @@ import TarjetaKpi from "./components/TarjetaKpi";
 import Temporizador from "./components/Temporizador";
 import Busqueda from "./pages/Busqueda";
 
-const INTERVALO_MS = 600000; // 10 minutos
+const INTERVALO_MS = 120000; // 2 minutos
 const DIAS_TENDENCIA = 14;
 const CLAVE_TEMA = "dashboard-tema";
 
@@ -56,7 +56,10 @@ function Dashboard({ modo, alternarModo }) {
   const [error, setError] = useState(null);
   const [ultimaCarga, setUltimaCarga] = useState(Date.now());
 
-  const cargar = useCallback(async () => {
+    // `forzar` solo lo manda el boton de recargar: le dice al backend que
+  // salte sus caches y vuelva a bajar la hoja. El refresco automatico no lo
+  // usa, para no hacer una descarga completa cada dos minutos.
+  const cargar = useCallback(async (forzar = false) => {
     const dia = fecha.format("YYYY-MM-DD");
     setCargando(true);
     setError(null);
@@ -65,7 +68,9 @@ function Dashboard({ modo, alternarModo }) {
       // Una sola llamada para los KPIs, el detalle por chofer y las horas.
       // Antes eran dos peticiones por recarga a dos endpoints distintos.
       const [resResumen, resTendencia] = await Promise.all([
-        api.get(ENDPOINTS.resumen, { params: { fecha: dia } }),
+        api.get(ENDPOINTS.resumen, {
+          params: { fecha: dia, ...(forzar ? { refrescar: true } : {}) },
+        }),
         api.get(ENDPOINTS.tendencia, { params: { dias: DIAS_TENDENCIA, hasta: dia } }),
       ]);
 
@@ -128,7 +133,7 @@ function Dashboard({ modo, alternarModo }) {
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
             <Temporizador ultimaCarga={ultimaCarga} intervaloMs={INTERVALO_MS} />
             <Tooltip title="Actualizar ahora">
-              <IconButton onClick={cargar} disabled={cargando} size="small">
+              <IconButton onClick={() => cargar(true)} disabled={cargando} size="small">
                 {cargando ? <CircularProgress size={18} /> : <RefreshIcon fontSize="small" />}
               </IconButton>
             </Tooltip>
@@ -199,7 +204,7 @@ function Dashboard({ modo, alternarModo }) {
             severity="error"
             sx={{ mb: 3 }}
             action={
-              <Button size="small" color="inherit" onClick={cargar}>
+              <Button size="small" color="inherit" onClick={() => cargar(true)}>
                 Reintentar
               </Button>
             }

@@ -79,15 +79,16 @@ def _cachear(response: Response) -> None:
     )
 
 
-def _cargar(desde: date | None = None, con_repeticiones: bool = False) -> pd.DataFrame:
-    """Carga la hoja.
+def _cargar(
+    desde: date | None = None,
+    con_repeticiones: bool = False,
+    forzar: bool = False,
+) -> pd.DataFrame:
 
-    Por defecto devuelve solo los movimientos reales: el sistema VARI duplica
-    registros al subir una unidad, y contarlos infla la produccion de cada
-    chofer. `con_repeticiones=True` devuelve todo, para el diagnostico.
-    """
     try:
-        df = obtener_movimientos(desde=desde if USAR_CONSULTA_FILTRADA else None)
+        df = obtener_movimientos(
+            desde=desde if USAR_CONSULTA_FILTRADA else None, force_refresh=forzar
+        )
     except Exception as error:  # noqa: BLE001
         raise HTTPException(
             status_code=503,
@@ -182,11 +183,21 @@ def health():
 def resumen(
     response: Response,
     fecha: date | None = Query(None, description="Dia a consultar (YYYY-MM-DD)"),
+    refrescar: bool = Query(False, description="Saltar los caches y leer la hoja"),
 ):
-    _cachear(response)
+    # Con refrescar no se deja cachear en el CDN: si no, la respuesta recien
+    # traida se guardaria y el siguiente que entre volveria a ver lo viejo.
+    if refrescar:
+        response.headers["Cache-Control"] = "no-store"
+    else:
+        _cachear(response)
 
     dia = fecha or _hoy()
-    crudo = _cargar(desde=dia - timedelta(days=DIAS_TENDENCIA), con_repeticiones=True)
+    crudo = _cargar(
+        desde=dia - timedelta(days=DIAS_TENDENCIA),
+        con_repeticiones=True,
+        forzar=refrescar,
+    )
     completo = solo_movimientos_reales(crudo)
 
     df = _del_dia(completo, dia)

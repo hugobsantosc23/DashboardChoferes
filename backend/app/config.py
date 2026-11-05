@@ -190,13 +190,13 @@ ALMACEN = _env("ALMACEN", "VARI BIRRAK")
 
 # --- Rendimiento ----------------------------------------------------------
 # Segundos que la hoja se guarda en memoria del proceso.
-CACHE_TTL = _env_int("CACHE_TTL", 300)
+CACHE_TTL = _env_int("CACHE_TTL", 120)
 
 # Segundos que el CDN de Vercel puede servir una respuesta sin ejecutar la
 # funcion. Es lo que de verdad evita descargar la hoja en cada peticion, porque
 # en serverless el cache en memoria casi nunca sobrevive entre invocaciones.
-CDN_CACHE_SEGUNDOS = _env_int("CDN_CACHE_SEGUNDOS", 120)
-CDN_STALE_SEGUNDOS = _env_int("CDN_STALE_SEGUNDOS", 600)
+CDN_CACHE_SEGUNDOS = _env_int("CDN_CACHE_SEGUNDOS", 60)
+CDN_STALE_SEGUNDOS = _env_int("CDN_STALE_SEGUNDOS", 120)
 
 TIMEOUT_DESCARGA = _env_int("TIMEOUT_DESCARGA", 20)
 
