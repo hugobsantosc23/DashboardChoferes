@@ -112,6 +112,45 @@ def _personas(usuario: object) -> int:
     """Cuantas personas comparten esa cuenta. 1 si no es compartida."""
     return CUENTAS_COMPARTIDAS.get(str(usuario or "").strip().upper(), 1)
 
+MESES = (
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+)
+
+
+def _rango(dia: date, periodo: str) -> tuple[date, date, str]:
+    """Primer y ultimo dia del periodo que contiene `dia`, y como llamarlo.
+
+    La semana empieza en lunes, que es como se organiza el turno del almacen;
+    el mes es el mes natural, no los ultimos 30 dias, porque la produccion se
+    compara contra el mes anterior completo.
+    """
+    if periodo == "semana":
+        inicio = dia - timedelta(days=dia.weekday())
+        fin = inicio + timedelta(days=6)
+        return inicio, fin, f"Semana del {inicio:%d/%m} al {fin:%d/%m/%Y}"
+
+    if periodo == "mes":
+        inicio = dia.replace(day=1)
+        # Sumar 32 dias y volver al dia 1 cae siempre en el mes siguiente,
+        # sin tener que saber cuantos dias tiene este ni si es bisiesto.
+        fin = (inicio + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+        return inicio, fin, f"{MESES[inicio.month - 1].capitalize()} {inicio.year}"
+
+    return dia, dia, dia.strftime("%d/%m/%Y")
+
+
+def _periodo_anterior(inicio: date, periodo: str) -> tuple[date, date]:
+    """El mismo periodo, corrido uno hacia atras."""
+    if periodo == "semana":
+        previo = inicio - timedelta(days=7)
+        return previo, previo + timedelta(days=6)
+    if periodo == "mes":
+        fin = inicio - timedelta(days=1)
+        return fin.replace(day=1), fin
+    previo = inicio - timedelta(days=1)
+    return previo, previo
+
 def _duracion(segundos: float) -> str:
     """Segundos a algo legible: '45 min', '3 h 20 min', '2 dias 4 h'."""
     segundos = max(0, int(segundos))
@@ -183,8 +222,16 @@ def health():
 def resumen(
     response: Response,
     fecha: date | None = Query(None, description="Dia a consultar (YYYY-MM-DD)"),
+    periodo: str = Query("dia", pattern="^(dia|semana|mes)$"),
     refrescar: bool = Query(False, description="Saltar los caches y leer la hoja"),
 ):
+    """Produccion de un dia, de una semana o de un mes.
+
+    El periodo decide tanto el rango que se mide como contra que se compara:
+    un dia contra el promedio de los dias previos, una semana contra la
+    semana anterior y un mes contra el mes anterior. Comparar una semana
+    contra un promedio diario no diria nada.
+    """
     # Con refrescar no se deja cachear en el CDN: si no, la respuesta recien
     # traida se guardaria y el siguiente que entre volveria a ver lo viejo.
     if refrescar:
@@ -193,41 +240,80 @@ def resumen(
         _cachear(response)
 
     dia = fecha or _hoy()
+    inicio, fin, etiqueta = _rango(dia, periodo)
+    ini_previo, fin_previo = _periodo_anterior(inicio, periodo)
+
     crudo = _cargar(
-        desde=dia - timedelta(days=DIAS_TENDENCIA),
+        desde=min(ini_previo, inicio - timedelta(days=DIAS_TENDENCIA)),
         con_repeticiones=True,
         forzar=refrescar,
     )
     completo = solo_movimientos_reales(crudo)
 
-    df = _del_dia(completo, dia)
+    def _entre(datos: pd.DataFrame, desde: date, hasta: date) -> pd.DataFrame:
+        solo_fecha = datos["fecha"].dt.date
+        return datos[(solo_fecha >= desde) & (solo_fecha <= hasta)]
 
-    # Cuantas repeticiones del sistema se descartaron ese dia: es la diferencia
-    # entre lo que dice el sistema en bruto y la produccion real.
-    del_dia_crudo = _del_dia(crudo, dia)
-    descartados = int(del_dia_crudo["repeticion"].sum()) if "repeticion" in del_dia_crudo else 0
-    aprobaciones = int(del_dia_crudo["aprobacion"].sum()) if "aprobacion" in del_dia_crudo else 0
+    df = _entre(completo, inicio, fin)
 
-    vacio = {
+    # Cuantas repeticiones del sistema y aprobaciones se descartaron: es la
+    # diferencia entre lo que dice el sistema en bruto y la produccion real.
+    del_rango_crudo = _entre(crudo, inicio, fin)
+    descartados = (
+        int(del_rango_crudo["repeticion"].sum()) if "repeticion" in del_rango_crudo else 0
+    )
+    aprobaciones = (
+        int(del_rango_crudo["aprobacion"].sum()) if "aprobacion" in del_rango_crudo else 0
+    )
+
+    # --- Contra que se compara ---
+    if periodo == "dia":
+        previos = completo[completo["fecha"].dt.date < inicio]
+        referencia = 0.0
+        if not previos.empty:
+            por_dia = previos.groupby(previos["fecha"].dt.date).size()
+            ultimos = por_dia.sort_index().tail(7)
+            if len(ultimos):
+                referencia = float(ultimos.mean())
+        referencia_etiqueta = "de promedio"
+    else:
+        referencia = float(len(_entre(completo, ini_previo, fin_previo)))
+        referencia_etiqueta = (
+            "la semana anterior" if periodo == "semana" else "el mes anterior"
+        )
+
+    cabecera = {
         "fecha": dia.isoformat(),
-        "kpis": {
-            "total": 0,
-            "choferes_activos": 0,
-            "unidades_movidas": 0,
-            "promedio_por_chofer": 0,
-            "hora_pico": None,
-            "promedio_7_dias": 0,
-            "variacion_pct": None,
-            "duplicados_descartados": descartados,
-            "aprobaciones_descartadas": aprobaciones,
-        },
-        "por_chofer": [],
-        "por_hora": [],
-        "actualizado": datetime.now(TZ).isoformat(timespec="seconds"),
+        "periodo": periodo,
+        "desde": inicio.isoformat(),
+        "hasta": fin.isoformat(),
+        "etiqueta": etiqueta,
     }
 
     if df.empty:
-        return vacio
+        return {
+            **cabecera,
+            "kpis": {
+                "total": 0,
+                "choferes_activos": 0,
+                "unidades_movidas": 0,
+                "promedio_por_chofer": 0,
+                "hora_pico": None,
+                "dias_con_actividad": 0,
+                "promedio_por_dia": 0,
+                "referencia": round(referencia, 1),
+                "referencia_etiqueta": referencia_etiqueta,
+                "variacion_pct": None,
+                "duplicados_descartados": descartados,
+                "aprobaciones_descartadas": aprobaciones,
+            },
+            "por_chofer": [],
+            "por_hora": [],
+            "actualizado": datetime.now(TZ).isoformat(timespec="seconds"),
+        }
+
+    es_un_dia = periodo == "dia"
+    dias_activos = int(df["fecha"].dt.date.nunique())
 
     # --- Por chofer ---
     agrupado = (
@@ -237,6 +323,7 @@ def resumen(
             unidades=("chasis", "nunique"),
             primero=("fecha", "min"),
             ultimo=("fecha", "max"),
+            dias=("fecha", lambda s: s.dt.date.nunique()),
         )
         .reset_index()
         .sort_values("movimientos", ascending=False)
@@ -244,8 +331,11 @@ def resumen(
 
     por_chofer = []
     for fila in agrupado.itertuples():
-        span_horas = (fila.ultimo - fila.primero).total_seconds() / 3600
         personas = _personas(fila.chofer)
+        # La jornada y el ritmo por hora solo tienen sentido dentro de un dia:
+        # en una semana, el minimo y el maximo serian la hora mas temprana de
+        # un dia y la mas tarde de otro, que no es ninguna jornada real.
+        span_horas = (fila.ultimo - fila.primero).total_seconds() / 3600
         por_chofer.append(
             {
                 "nombre": _nombre(fila.chofer),
@@ -258,17 +348,19 @@ def resumen(
                 else None,
                 "movimientos": int(fila.movimientos),
                 "unidades": int(fila.unidades),
-                "primero": fila.primero.strftime("%H:%M"),
-                "ultimo": fila.ultimo.strftime("%H:%M"),
-                # Ritmo real de trabajo: movimientos por hora entre el primero
-                # y el ultimo registro del dia.
+                "dias": int(fila.dias),
+                "por_dia": round(fila.movimientos / fila.dias, 1) if fila.dias else None,
+                "primero": fila.primero.strftime("%H:%M") if es_un_dia else None,
+                "ultimo": fila.ultimo.strftime("%H:%M") if es_un_dia else None,
                 "por_hora": round(fila.movimientos / span_horas, 1)
-                if span_horas >= 0.5
+                if es_un_dia and span_horas >= 0.5
                 else None,
             }
         )
 
     # --- Por hora ---
+    # En semana y mes esto suma todos los dias: no mide una jornada, muestra
+    # a que horas se concentra el trabajo en el periodo.
     conteo_horas = df["fecha"].dt.hour.value_counts()
     por_hora = [
         {"hora": f"{h:02d}:00", "movimientos": int(conteo_horas.get(h, 0))}
@@ -278,15 +370,6 @@ def resumen(
         f"{int(conteo_horas.idxmax()):02d}:00" if not conteo_horas.empty else None
     )
 
-    # --- Comparativa contra los dias anteriores con actividad ---
-    previos = completo[completo["fecha"].dt.date < dia]
-    promedio_previo = 0.0
-    if not previos.empty:
-        por_dia = previos.groupby(previos["fecha"].dt.date).size()
-        ultimos = por_dia.sort_index().tail(7)
-        if len(ultimos):
-            promedio_previo = float(ultimos.mean())
-
     total = len(df)
 
     # Personas, no cuentas: PROTELANDTEMP la comparten 4 choferes, asi que
@@ -295,16 +378,19 @@ def resumen(
     activos = sum(_personas(c) for c in df["chofer"].unique())
 
     return {
-        "fecha": dia.isoformat(),
+        **cabecera,
         "kpis": {
             "total": total,
             "choferes_activos": activos,
             "unidades_movidas": int(df["chasis"].nunique()),
             "promedio_por_chofer": round(total / activos, 1) if activos else 0,
             "hora_pico": hora_pico,
-            "promedio_7_dias": round(promedio_previo, 1),
-            "variacion_pct": round((total - promedio_previo) / promedio_previo * 100)
-            if promedio_previo
+            "dias_con_actividad": dias_activos,
+            "promedio_por_dia": round(total / dias_activos, 1) if dias_activos else 0,
+            "referencia": round(referencia, 1),
+            "referencia_etiqueta": referencia_etiqueta,
+            "variacion_pct": round((total - referencia) / referencia * 100)
+            if referencia
             else None,
             "duplicados_descartados": descartados,
             "aprobaciones_descartadas": aprobaciones,

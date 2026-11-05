@@ -33,14 +33,12 @@ import { VIZ, crearTema } from "./tema";
 
 import GraficoChoferes from "./components/GraficoChoferes";
 import GraficoHoras from "./components/GraficoHoras";
-import GraficoTendencia from "./components/GraficoTendencia";
 import TablaChoferes from "./components/TablaChoferes";
 import TarjetaKpi from "./components/TarjetaKpi";
 import Temporizador from "./components/Temporizador";
 import Busqueda from "./pages/Busqueda";
 
 const INTERVALO_MS = 120000; // 2 minutos
-const DIAS_TENDENCIA = 14;
 const CLAVE_TEMA = "dashboard-tema";
 
 function Dashboard({ modo, alternarModo }) {
@@ -49,8 +47,9 @@ function Dashboard({ modo, alternarModo }) {
 
   const [fecha, setFecha] = useState(dayjs());
   const [resumen, setResumen] = useState(null);
-  const [tendencia, setTendencia] = useState([]);
+  
   const [vista, setVista] = useState("movimientos");
+  const [periodo, setPeriodo] = useState("dia");
 
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState(null);
@@ -65,24 +64,19 @@ function Dashboard({ modo, alternarModo }) {
     setError(null);
 
     try {
-      // Una sola llamada para los KPIs, el detalle por chofer y las horas.
-      // Antes eran dos peticiones por recarga a dos endpoints distintos.
-      const [resResumen, resTendencia] = await Promise.all([
-        api.get(ENDPOINTS.resumen, {
-          params: { fecha: dia, ...(forzar ? { refrescar: true } : {}) },
-        }),
-        api.get(ENDPOINTS.tendencia, { params: { dias: DIAS_TENDENCIA, hasta: dia } }),
-      ]);
+            // Una sola llamada para los KPIs, el detalle por chofer y las horas.
+      const { data } = await api.get(ENDPOINTS.resumen, {
+        params: { fecha: dia, periodo, ...(forzar ? { refrescar: true } : {}) },
+      });
 
-      setResumen(resResumen.data);
-      setTendencia(resTendencia.data);
+      setResumen(data);
       setUltimaCarga(Date.now());
     } catch (e) {
       setError(mensajeDeError(e));
     } finally {
       setCargando(false);
     }
-  }, [fecha]);
+  }, [fecha, periodo]);
 
   // Un unico temporizador. El componente Temporizador solo muestra la cuenta
   // atras; ya no dispara recargas por su cuenta.
@@ -124,9 +118,12 @@ function Dashboard({ modo, alternarModo }) {
             <Typography variant="h4" sx={{ color: v.tintaPrincipal, lineHeight: 1.2 }}>
               Movimientos de unidades
             </Typography>
-            <Typography sx={{ color: v.tintaSecundaria, fontSize: "0.85rem", mt: 0.5 }}>
-              {esHoy ? "Hoy" : fecha.locale("es").format("dddd")} ·{" "}
-              {fecha.format("DD/MM/YYYY")}
+                        <Typography sx={{ color: v.tintaSecundaria, fontSize: "0.85rem", mt: 0.5 }}>
+              {periodo === "dia"
+                ? `${esHoy ? "Hoy" : fecha.locale("es").format("dddd")} · ${fecha.format(
+                    "DD/MM/YYYY"
+                  )}`
+                : resumen?.etiqueta ?? "…"}
             </Typography>
           </Box>
 
@@ -168,7 +165,21 @@ function Dashboard({ modo, alternarModo }) {
               onChange={(nueva) => nueva && setFecha(nueva)}
               slotProps={{ textField: { size: "small", sx: { width: 168 } } }}
             />
-          </LocalizationProvider>
+                    </LocalizationProvider>
+
+          {/* El periodo se calcula a partir de la fecha elegida: la semana o
+              el mes que la contienen. Asi un solo calendario sirve para los
+              tres, en vez de pedir un rango de inicio y fin. */}
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={periodo}
+            onChange={(e, nuevo) => nuevo && setPeriodo(nuevo)}
+          >
+            <ToggleButton value="dia">Día</ToggleButton>
+            <ToggleButton value="semana">Semana</ToggleButton>
+            <ToggleButton value="mes">Mes</ToggleButton>
+          </ToggleButtonGroup>
 
           {!esHoy && (
             <Button size="small" onClick={() => setFecha(dayjs())}>
@@ -241,14 +252,20 @@ function Dashboard({ modo, alternarModo }) {
               }}
             >
               <Box sx={{ gridColumn: { xs: "1 / -1", sm: "auto" } }}>
-                <TarjetaKpi
+                                <TarjetaKpi
                   destacado
-                  etiqueta="Movimientos del día"
+                  etiqueta={
+                    periodo === "dia"
+                      ? "Movimientos del día"
+                      : periodo === "semana"
+                      ? "Movimientos de la semana"
+                      : "Movimientos del mes"
+                  }
                   valor={kpis?.total ?? 0}
                   variacion={kpis?.variacion_pct}
                   nota={
-                    kpis?.promedio_7_dias
-                      ? `vs ${kpis.promedio_7_dias} de promedio`
+                    kpis?.referencia
+                      ? `vs ${kpis.referencia} ${kpis.referencia_etiqueta}`
                       : "sin referencia previa"
                   }
                 />
@@ -260,7 +277,17 @@ function Dashboard({ modo, alternarModo }) {
                 valor={kpis?.promedio_por_chofer ?? 0}
                 sufijo="mov."
               />
-              <TarjetaKpi etiqueta="Hora pico" valor={kpis?.hora_pico ?? "–"} />
+                            {periodo === "dia" ? (
+                <TarjetaKpi etiqueta="Hora pico" valor={kpis?.hora_pico ?? "–"} />
+              ) : (
+                <TarjetaKpi
+                  etiqueta="Promedio por día"
+                  valor={kpis?.promedio_por_dia ?? 0}
+                  sufijo={`en ${kpis?.dias_con_actividad ?? 0} ${
+                    kpis?.dias_con_actividad === 1 ? "día" : "días"
+                  }`}
+                />
+              )}
             </Box>
             
 
@@ -282,52 +309,32 @@ function Dashboard({ modo, alternarModo }) {
               </CardContent>
             </Card>
 
-            {/* ---------- Por hora y tendencia ---------- */}
-            <Box
-              sx={{
-                display: "grid",
-                gap: 2,
-                mb: 2,
-                gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
-              }}
-            >
-              <Card>
-                <CardContent>
-                  <Encabezado
-                    titulo="Ritmo por hora"
-                    detalle={
-                      kpis?.hora_pico
+                        {/* ---------- Ritmo por hora ---------- */}
+            <Card sx={{ mb: 2 }}>
+              <CardContent>
+                <Encabezado
+                  titulo="Ritmo por hora"
+                  detalle={
+                    periodo === "dia"
+                      ? kpis?.hora_pico
                         ? `Mayor actividad a las ${kpis.hora_pico}`
                         : "Movimientos registrados en cada hora"
-                    }
-                    modo={modo}
-                  />
-                  <GraficoHoras datos={resumen?.por_hora} horaPico={kpis?.hora_pico} />
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent>
-                  <Encabezado
-                    titulo={`Últimos ${DIAS_TENDENCIA} días`}
-                    detalle="Movimientos por día, con el día seleccionado marcado"
-                    modo={modo}
-                  />
-                  <GraficoTendencia
-                    datos={tendencia}
-                    diaSeleccionado={fecha.format("YYYY-MM-DD")}
-                    promedio={kpis?.promedio_7_dias ?? 0}
-                  />
-                </CardContent>
-              </Card>
-            </Box>
+                      : `En qué horas se concentra el trabajo, sumando ${
+                          kpis?.dias_con_actividad ?? 0
+                        } ${kpis?.dias_con_actividad === 1 ? "día" : "días"}`
+                  }
+                  modo={modo}
+                />
+                <GraficoHoras datos={resumen?.por_hora} horaPico={kpis?.hora_pico} />
+              </CardContent>
+            </Card>
 
             {/* ---------- Tabla ---------- */}
             {porChofer.length > 0 && (
               <Card>
                 <CardContent>
                   <Encabezado titulo="Detalle por chofer" modo={modo} />
-                  <TablaChoferes datos={porChofer} />
+                  <TablaChoferes datos={porChofer} periodo={periodo} />
                 </CardContent>
               </Card>
             )}
