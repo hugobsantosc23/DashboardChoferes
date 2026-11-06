@@ -32,6 +32,7 @@ import { ENDPOINTS, api, mensajeDeError } from "./api";
 import { VIZ, crearTema } from "./tema";
 
 import GraficoChoferes from "./components/GraficoChoferes";
+import GraficoComparativa from "./components/GraficoComparativa";
 import GraficoHoras from "./components/GraficoHoras";
 import TablaChoferes from "./components/TablaChoferes";
 import TablaPausas from "./components/TablaPausas";
@@ -307,6 +308,22 @@ function Dashboard({ modo, alternarModo }) {
                   modo={modo}
                 />
                 <GraficoChoferes datos={porChofer} />
+              </CardContent>
+            </Card>
+
+                        {/* ---------- Comparativa diaria ---------- */}
+            <Card sx={{ mb: 2 }}>
+              <CardContent>
+                <Encabezado
+                  titulo="Producción por día"
+                  detalle={
+                    periodo === "dia"
+                      ? "Últimos 14 días, una línea por chofer"
+                      : `${resumen?.etiqueta ?? ""}, una línea por chofer`
+                  }
+                  modo={modo}
+                />
+                <GraficoComparativa datos={resumen?.por_dia_chofer} />
               </CardContent>
             </Card>
 

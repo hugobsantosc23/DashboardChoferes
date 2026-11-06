@@ -3,13 +3,19 @@ import { createTheme } from "@mui/material/styles";
 /**
  * Paleta de los graficos.
  *
- * Un solo tono azul para las barras y las lineas, porque todos los graficos
- * muestran una sola serie (magnitud), no categorias que haya que distinguir
- * por color. Los pasos de modo oscuro no son el mismo hex aclarado: son el
- * paso de la misma rampa elegido para el fondo oscuro.
+ * Un solo tono azul (`serie`) para los graficos de una sola serie, que son
+ * casi todos: ahi el color no distingue nada, la longitud ya lo dice. Los
+ * pasos de modo oscuro no son el mismo hex aclarado: son el paso de la misma
+ * rampa elegido para el fondo oscuro.
  *
- * Verde y rojo estan reservados para estado (subio / bajo) y nunca se usan
- * como color de serie.
+ * `categoricas` es la excepcion: la comparativa por chofer dibuja hasta seis
+ * lineas a la vez y ahi el color SI es la identidad de cada persona. El orden
+ * es fijo y se asigna por chofer, no por puesto en el ranking: si fuera por
+ * ranking, filtrar o cambiar de dia repintaria a todos y nadie podria seguir
+ * "su" linea. Validada con el script de paletas en claro y oscuro.
+ *
+ * Verde y rojo (bueno / malo) estan reservados para estado (subio / bajo) y
+ * nunca se usan como color de serie.
  */
 export const VIZ = {
   light: {
@@ -25,6 +31,7 @@ export const VIZ = {
     // Paso de la misma rampa para las barras sin enfasis. No mas claro que
     // este: por debajo deja de distinguirse del fondo.
     serieSuave: "#86b6ef",
+    categoricas: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"],
     bueno: "#006300",
     malo: "#d03b3b",
   },
@@ -39,6 +46,7 @@ export const VIZ = {
     borde: "rgba(255, 255, 255, 0.10)",
     serie: "#3987e5",
     serieSuave: "#184f95",
+    categoricas: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300"],
     bueno: "#0ca30c",
     malo: "#e66767",
   },

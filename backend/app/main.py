@@ -154,6 +154,66 @@ def _periodo_anterior(inicio: date, periodo: str) -> tuple[date, date]:
     previo = inicio - timedelta(days=1)
     return previo, previo
 
+def _serie_por_dia(datos: pd.DataFrame, inicio: date, fin: date) -> dict:
+    """Produccion diaria de cada chofer, para compararlos en un grafico.
+
+    Los valores van POR PERSONA, no por cuenta: PROTELANDTEMP la comparten
+    cuatro choferes y su linea en bruto estaria siempre cuatro veces mas
+    arriba que las demas, lo que haria inutil la comparacion.
+
+    Las series salen en el orden de CHOFERES_FILTRO y no por produccion: el
+    color se asigna por posicion, y si el orden dependiera del ranking, un
+    dia flojo le cambiaria el color a medio mundo y nadie podria seguir su
+    propia linea de un dia para otro.
+    """
+    dias = [d.date() for d in pd.date_range(inicio, fin, freq="D")]
+    df = datos[
+        (datos["fecha"].dt.date >= inicio) & (datos["fecha"].dt.date <= fin)
+    ]
+
+    vacio = {"dias": [], "fechas": [], "series": []}
+    if df.empty or not dias:
+        return vacio
+
+    tabla = (
+        df.groupby([df["fecha"].dt.date, "chofer"])
+        .size()
+        .unstack(fill_value=0)
+        .reindex(dias, fill_value=0)
+    )
+
+    # El indice de color sale de CHOFERES_FILTRO, que no cambia nunca, y no
+    # de la lista de presentes: un chofer que no trabajo hoy desaparece de la
+    # tabla, y si el color se contara sobre los presentes, todos los de abajo
+    # se correrian un tono. Asi cada persona conserva el suyo siempre.
+    posicion = {u: i for i, u in enumerate(CHOFERES_FILTRO)}
+    for extra in sorted(u for u in tabla.columns if u not in posicion):
+        posicion[extra] = len(posicion)
+
+    usuarios = sorted(tabla.columns, key=lambda u: posicion[u])
+
+    series = []
+    for usuario in usuarios:
+        personas = _personas(usuario)
+        series.append(
+            {
+                "nombre": _nombre(usuario),
+                "usuario": usuario,
+                "personas": personas,
+                "color": posicion[usuario],
+                "valores": [
+                    round(float(v) / personas, 1) if personas > 1 else int(v)
+                    for v in tabla[usuario]
+                ],
+            }
+        )
+
+    return {
+        "dias": [d.strftime("%d/%m") for d in dias],
+        "fechas": [d.isoformat() for d in dias],
+        "series": series,
+    }
+
 def _lugar(isla: object, ubicacion: object) -> str:
     """Isla y posicion en un solo texto: "ISLA 24 · 4 - D".
 
@@ -367,12 +427,22 @@ def resumen(
     else:
         _cachear(response)
 
-    dia = fecha or _hoy()
+        dia = fecha or _hoy()
     inicio, fin, etiqueta = _rango(dia, periodo)
     ini_previo, fin_previo = _periodo_anterior(inicio, periodo)
 
+    # Rango del grafico comparativo. Con periodo "dia" seria un solo punto por
+    # chofer, que no compara nada, asi que ahi se estira a dos semanas. En
+    # semana y mes se corta en hoy: los dias que aun no han pasado dibujarian
+    # una caida a cero que no ha ocurrido.
+    if periodo == "dia":
+        graf_ini, graf_fin = dia - timedelta(days=DIAS_TENDENCIA - 1), dia
+    else:
+        graf_ini = inicio
+        graf_fin = max(inicio, min(fin, _hoy()))
+
     crudo = _cargar(
-        desde=min(ini_previo, inicio - timedelta(days=DIAS_TENDENCIA)),
+        desde=min(ini_previo, graf_ini, inicio - timedelta(days=DIAS_TENDENCIA)),
         con_repeticiones=True,
         forzar=refrescar,
     )
@@ -437,6 +507,7 @@ def resumen(
             },
             "por_chofer": [],
             "por_hora": [],
+            "por_dia_chofer": _serie_por_dia(completo, graf_ini, graf_fin),
             "pausas": _pausas(df),
             "actualizado": datetime.now(TZ).isoformat(timespec="seconds"),
         }
@@ -526,6 +597,7 @@ def resumen(
         },
         "por_chofer": por_chofer,
         "por_hora": por_hora,
+        "por_dia_chofer": _serie_por_dia(completo, graf_ini, graf_fin),
         "pausas": _pausas(df),
         "actualizado": datetime.now(TZ).isoformat(timespec="seconds"),
     }
