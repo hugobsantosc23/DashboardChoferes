@@ -40,6 +40,7 @@ export const ENDPOINTS = {
   resumen: "/api/resumen",
   tendencia: "/api/tendencia",
   buscar: "/api/unidades/buscar",
+  comparativa: "/api/comparativa",
   historial: (chasis) => `/api/unidades/${encodeURIComponent(chasis)}/historial`,
   flujo: (chasis) => `/api/unidades/${encodeURIComponent(chasis)}/flujo`,
   exportar: "/api/exportar",

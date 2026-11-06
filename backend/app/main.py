@@ -115,6 +115,8 @@ def _personas(usuario: object) -> int:
     """Cuantas personas comparten esa cuenta. 1 si no es compartida."""
     return CUENTAS_COMPARTIDAS.get(str(usuario or "").strip().upper(), 1)
 
+DIAS_SEMANA = ("Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom")
+
 MESES = (
     "enero", "febrero", "marzo", "abril", "mayo", "junio",
     "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
@@ -195,21 +197,37 @@ def _serie_por_dia(datos: pd.DataFrame, inicio: date, fin: date) -> dict:
     series = []
     for usuario in usuarios:
         personas = _personas(usuario)
+        valores = [
+            round(float(v) / personas, 1) if personas > 1 else int(v)
+            for v in tabla[usuario]
+        ]
+        trabajados = [x for x in valores if x]
+        mejor = max(valores) if valores else 0
         series.append(
             {
                 "nombre": _nombre(usuario),
                 "usuario": usuario,
                 "personas": personas,
                 "color": posicion[usuario],
-                "valores": [
-                    round(float(v) / personas, 1) if personas > 1 else int(v)
-                    for v in tabla[usuario]
-                ],
+                "valores": valores,
+                # Resumen de la semana del chofer, para cuando se le aisla en
+                # el grafico. El promedio va sobre los dias que trabajo, no
+                # sobre los siete: dividir entre 7 a quien libra el domingo
+                # lo hace parecer mas flojo de lo que fue.
+                "total": round(sum(valores), 1),
+                "dias_trabajados": len(trabajados),
+                "promedio": round(sum(valores) / len(trabajados), 1)
+                if trabajados
+                else 0,
+                "mejor": mejor,
+                "mejor_dia": dias[valores.index(mejor)].strftime("%d/%m")
+                if trabajados
+                else None,
             }
         )
 
     return {
-        "dias": [d.strftime("%d/%m") for d in dias],
+        "dias": [f"{DIAS_SEMANA[d.weekday()]} {d.day:02d}" for d in dias],
         "fechas": [d.isoformat() for d in dias],
         "series": series,
     }
@@ -431,18 +449,8 @@ def resumen(
     inicio, fin, etiqueta = _rango(dia, periodo)
     ini_previo, fin_previo = _periodo_anterior(inicio, periodo)
 
-    # Rango del grafico comparativo. Con periodo "dia" seria un solo punto por
-    # chofer, que no compara nada, asi que ahi se estira a dos semanas. En
-    # semana y mes se corta en hoy: los dias que aun no han pasado dibujarian
-    # una caida a cero que no ha ocurrido.
-    if periodo == "dia":
-        graf_ini, graf_fin = dia - timedelta(days=DIAS_TENDENCIA - 1), dia
-    else:
-        graf_ini = inicio
-        graf_fin = max(inicio, min(fin, _hoy()))
-
     crudo = _cargar(
-        desde=min(ini_previo, graf_ini, inicio - timedelta(days=DIAS_TENDENCIA)),
+        desde=min(ini_previo, inicio - timedelta(days=DIAS_TENDENCIA)),
         con_repeticiones=True,
         forzar=refrescar,
     )
@@ -507,7 +515,6 @@ def resumen(
             },
             "por_chofer": [],
             "por_hora": [],
-            "por_dia_chofer": _serie_por_dia(completo, graf_ini, graf_fin),
             "pausas": _pausas(df),
             "actualizado": datetime.now(TZ).isoformat(timespec="seconds"),
         }
@@ -597,11 +604,52 @@ def resumen(
         },
         "por_chofer": por_chofer,
         "por_hora": por_hora,
-        "por_dia_chofer": _serie_por_dia(completo, graf_ini, graf_fin),
         "pausas": _pausas(df),
         "actualizado": datetime.now(TZ).isoformat(timespec="seconds"),
     }
 
+@app.get("/api/comparativa")
+def comparativa(
+    response: Response,
+    fecha: date | None = Query(None, description="Cualquier dia de la semana"),
+    semanas: int = Query(0, ge=-520, le=520, description="Semanas hacia atras o adelante"),
+):
+    """Produccion diaria de cada chofer en UNA semana de lunes a domingo.
+
+    Va en su propio endpoint y no dentro de /api/resumen para que moverse de
+    semana en el grafico no obligue a recalcular los KPIs, las pausas y el
+    resto del tablero.
+
+    La semana es la natural, de lunes a domingo: el conteo se reinicia cada
+    lunes en vez de arrastrar una ventana movil, que es lo que hace el turno
+    del almacen.
+    """
+    _cachear(response)
+
+    dia = (fecha or _hoy()) + timedelta(weeks=semanas)
+    inicio = dia - timedelta(days=dia.weekday())
+    fin = inicio + timedelta(days=6)
+
+    hoy = _hoy()
+    es_actual = inicio <= hoy <= fin
+    # En la semana en curso se corta en hoy: los dias que aun no han llegado
+    # dibujarian una caida a cero que no ha ocurrido. Una semana ya pasada se
+    # muestra entera, ceros incluidos, porque ahi el cero si es un dato.
+    ultimo = min(fin, hoy) if es_actual else fin
+
+    completo = solo_movimientos_reales(_cargar(desde=inicio))
+    datos = _serie_por_dia(completo, inicio, max(inicio, ultimo))
+
+    return {
+        **datos,
+        "desde": inicio.isoformat(),
+        "hasta": fin.isoformat(),
+        "etiqueta": f"Semana del {inicio:%d/%m} al {fin:%d/%m/%Y}",
+        "es_semana_actual": es_actual,
+        # Sin esto el boton de "semana siguiente" dejaria avanzar a semanas
+        # que todavia no existen y el grafico saldria vacio.
+        "hay_siguiente": fin < hoy,
+    }
 
 # --------------------------------------------------------------------------
 # Tendencia de los ultimos dias

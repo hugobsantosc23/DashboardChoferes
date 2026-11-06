@@ -316,14 +316,10 @@ function Dashboard({ modo, alternarModo }) {
               <CardContent>
                 <Encabezado
                   titulo="Producción por día"
-                  detalle={
-                    periodo === "dia"
-                      ? "Últimos 14 días, una línea por chofer"
-                      : `${resumen?.etiqueta ?? ""}, una línea por chofer`
-                  }
+                  detalle="Una línea por chofer, de lunes a domingo"
                   modo={modo}
                 />
-                <GraficoComparativa datos={resumen?.por_dia_chofer} />
+                <GraficoComparativa />
               </CardContent>
             </Card>
 
