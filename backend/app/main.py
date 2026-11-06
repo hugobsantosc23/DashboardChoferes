@@ -11,12 +11,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import (
     ALMACEN,
+    ALMUERZOS,
     CDN_CACHE_SEGUNDOS,
     CDN_STALE_SEGUNDOS,
     CHOFERES_FILTRO,
     CORS_ORIGINS,
     HORA_FIN,
     HORA_INICIO,
+    PAUSA_MINUTOS,
+    PAUSAS_MAX_REGISTRO,
     USAR_CONSULTA_FILTRADA,
     ZONA_HORARIA,
 )
@@ -150,6 +153,117 @@ def _periodo_anterior(inicio: date, periodo: str) -> tuple[date, date]:
         return fin.replace(day=1), fin
     previo = inicio - timedelta(days=1)
     return previo, previo
+
+def _pausas(df: pd.DataFrame) -> dict:
+    """Huecos de mas de PAUSA_MINUTOS entre dos movimientos del mismo chofer.
+
+    Solo cuenta huecos DENTRO de un mismo dia: entre la ultima marca de un dia
+    y la primera del siguiente hay toda la noche, y eso no es una pausa de
+    nadie. Tampoco se mide antes del primer movimiento ni despues del ultimo,
+    porque la hoja no dice a que hora empieza ni termina el turno.
+    """
+    vacio = {
+        "umbral_minutos": PAUSA_MINUTOS,
+        "total": 0,
+        "por_chofer": [],
+        "registro": [],
+        "truncado": False,
+    }
+    if df.empty:
+        return vacio
+
+    d = df[["chofer", "fecha"]].copy()
+    for columna in ("isla", "ubicacion"):
+        d[columna] = df[columna] if columna in df.columns else ""
+    d["dia"] = d["fecha"].dt.date
+    d = d.sort_values(["chofer", "dia", "fecha"], kind="stable")
+
+    grupo = d.groupby(["chofer", "dia"], sort=False)
+    d["previa"] = grupo["fecha"].shift()
+    d["previa_isla"] = grupo["isla"].shift()
+    d["previa_ubicacion"] = grupo["ubicacion"].shift()
+    d["bruto"] = (d["fecha"] - d["previa"]).dt.total_seconds() / 60
+
+    # --- Descontar el almuerzo ---
+    # Se resta solo la parte del hueco que cae dentro de la franja, no el
+    # hueco entero: un paron de 11:30 a 14:00 sigue siendo una pausa de 90
+    # minutos, no desaparece por haber tocado la hora de comer.
+    dia_texto = d["dia"].astype(str)
+    alm_ini = pd.to_datetime(
+        dia_texto + " " + d["chofer"].map(lambda c: ALMUERZOS.get(c, (None,))[0]),
+        errors="coerce",
+    )
+    alm_fin = pd.to_datetime(
+        dia_texto
+        + " "
+        + d["chofer"].map(lambda c: (ALMUERZOS.get(c) or (None, None))[1]),
+        errors="coerce",
+    )
+
+    # Con NaT (cuenta sin almuerzo configurado) las comparaciones de pandas
+    # ignorarian el valor ausente y el solape saldria igual al hueco entero,
+    # borrando todas las pausas de esa cuenta. Por eso se enmascara aparte.
+    tiene_almuerzo = alm_ini.notna() & alm_fin.notna()
+    fin_solape = pd.concat([d["fecha"], alm_fin], axis=1).min(axis=1)
+    ini_solape = pd.concat([d["previa"], alm_ini], axis=1).max(axis=1)
+    solape = (fin_solape - ini_solape).dt.total_seconds().div(60)
+    d["almuerzo"] = solape.where(tiene_almuerzo).clip(lower=0).fillna(0)
+
+    d["minutos"] = (d["bruto"] - d["almuerzo"]).clip(lower=0)
+
+    huecos = d[d["bruto"].notna() & (d["minutos"] >= PAUSA_MINUTOS)].copy()
+    if huecos.empty:
+        return vacio
+
+    resumen_chofer = (
+        huecos.groupby("chofer")
+        .agg(pausas=("minutos", "size"), minutos=("minutos", "sum"),
+             mas_larga=("minutos", "max"))
+        .reset_index()
+        .sort_values("minutos", ascending=False)
+    )
+
+    por_chofer = [
+        {
+            "nombre": _nombre(f.chofer),
+            "usuario": f.chofer,
+            "personas": _personas(f.chofer),
+            "pausas": int(f.pausas),
+            "minutos": int(round(f.minutos)),
+            "tiempo": _duracion(f.minutos * 60),
+            "mas_larga": _duracion(f.mas_larga * 60),
+        }
+        for f in resumen_chofer.itertuples()
+    ]
+
+    # De la mas larga a la mas corta: en un mes hay cientos y lo que interesa
+    # son las gordas, no leerlas todas en orden cronologico.
+    orden = huecos.sort_values("minutos", ascending=False)
+    registro = [
+        {
+            "nombre": _nombre(f.chofer),
+            "usuario": f.chofer,
+            "dia": f.dia.strftime("%d/%m/%Y"),
+            "desde": f.previa.strftime("%H:%M"),
+            "hasta": f.fecha.strftime("%H:%M"),
+            "minutos": int(round(f.minutos)),
+            "duracion": _duracion(f.minutos * 60),
+            # Cuanto del hueco era almuerzo, para que se entienda por que
+            # "de 11:30 a 14:00" aparece como una pausa de 90 minutos.
+            "almuerzo_min": int(round(f.almuerzo)),
+            "ultima_ubicacion": _texto(f.previa_ubicacion),
+            "siguiente_ubicacion": _texto(f.ubicacion),
+        }
+        for f in orden.head(PAUSAS_MAX_REGISTRO).itertuples()
+    ]
+
+    return {
+        "umbral_minutos": PAUSA_MINUTOS,
+        "total": int(len(huecos)),
+        "por_chofer": por_chofer,
+        "registro": registro,
+        "truncado": len(huecos) > PAUSAS_MAX_REGISTRO,
+    }
 
 def _duracion(segundos: float) -> str:
     """Segundos a algo legible: '45 min', '3 h 20 min', '2 dias 4 h'."""
@@ -309,6 +423,7 @@ def resumen(
             },
             "por_chofer": [],
             "por_hora": [],
+            "pausas": _pausas(df),
             "actualizado": datetime.now(TZ).isoformat(timespec="seconds"),
         }
 
@@ -397,6 +512,7 @@ def resumen(
         },
         "por_chofer": por_chofer,
         "por_hora": por_hora,
+        "pausas": _pausas(df),
         "actualizado": datetime.now(TZ).isoformat(timespec="seconds"),
     }
 

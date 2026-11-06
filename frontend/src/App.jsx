@@ -34,6 +34,7 @@ import { VIZ, crearTema } from "./tema";
 import GraficoChoferes from "./components/GraficoChoferes";
 import GraficoHoras from "./components/GraficoHoras";
 import TablaChoferes from "./components/TablaChoferes";
+import TablaPausas from "./components/TablaPausas";
 import TarjetaKpi from "./components/TarjetaKpi";
 import Temporizador from "./components/Temporizador";
 import Busqueda from "./pages/Busqueda";
@@ -326,6 +327,26 @@ function Dashboard({ modo, alternarModo }) {
                   modo={modo}
                 />
                 <GraficoHoras datos={resumen?.por_hora} horaPico={kpis?.hora_pico} />
+              </CardContent>
+            </Card>
+
+                         {/* ---------- Pausas ---------- */}
+            <Card sx={{ mb: 2 }}>
+              <CardContent>
+                <Encabezado
+                  titulo={`Pausas de más de ${
+                    resumen?.pausas?.umbral_minutos ?? 30
+                  } minutos`}
+                  detalle={
+                    resumen?.pausas?.total
+                      ? `${resumen.pausas.total} ${
+                          resumen.pausas.total === 1 ? "pausa" : "pausas"
+                        } sin mover ninguna unidad`
+                      : "Sin pausas largas en el periodo"
+                  }
+                  modo={modo}
+                />
+                <TablaPausas pausas={resumen?.pausas} periodo={periodo} />
               </CardContent>
             </Card>
 

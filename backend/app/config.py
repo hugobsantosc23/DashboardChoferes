@@ -202,8 +202,37 @@ TIMEOUT_DESCARGA = _env_int("TIMEOUT_DESCARGA", 20)
 
 # --- Horario y zona -------------------------------------------------------
 ZONA_HORARIA = _env("ZONA_HORARIA", "America/Lima")
-HORA_INICIO = _env_int("HORA_INICIO", 6)
-HORA_FIN = _env_int("HORA_FIN", 22)
+# Franja que dibuja el grafico de ritmo por hora: de 7 a 20 incluidas.
+# No filtra datos: un movimiento a las 6 o a las 21 sigue contando en los
+# totales, solo que su barra no se dibuja.
+HORA_INICIO = _env_int("HORA_INICIO", 7)
+HORA_FIN = _env_int("HORA_FIN", 20)
+
+# --- Pausas entre movimientos ---------------------------------------------
+# Minutos sin mover una unidad a partir de los cuales se registra una pausa.
+PAUSA_MINUTOS = _env_int("PAUSA_MINUTOS", 30)
+
+# Horario de almuerzo de cada cuenta. Los minutos que caen dentro de esta
+# franja se restan del hueco antes de comparar con el umbral, asi que comer
+# no aparece como pausa, pero un paron que empieza antes o acaba despues si
+# se sigue viendo, descontada la parte del almuerzo.
+#
+# Angelo, Hugo Raul y Guzman almuerzan de 12 a 1; los cuatro que comparten
+# PROTELANDTEMP, de 1 a 2.
+#
+# Una cuenta que no este en esta tabla no tiene ningun descuento: si algun
+# dia JFERNANDEZM o CVEGAL vuelven a tener actividad, anadelos aqui o les
+# saldra una pausa de una hora cada mediodia.
+ALMUERZOS = {
+    "BRIVASL": ("12:00", "13:00"),
+    "HSANTOSV": ("12:00", "13:00"),
+    "VGUZMAN": ("12:00", "13:00"),
+    "PROTELANDTEMP": ("13:00", "14:00"),
+}
+
+# Cuantas pausas se devuelven en el registro detallado, de la mas larga a la
+# mas corta. En un mes pueden ser miles y la respuesta se volveria enorme.
+PAUSAS_MAX_REGISTRO = _env_int("PAUSAS_MAX_REGISTRO", 100)
 
 # --- CORS -----------------------------------------------------------------
 # Solo necesario si el frontend vive en otro dominio.
