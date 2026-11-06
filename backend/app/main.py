@@ -154,6 +154,20 @@ def _periodo_anterior(inicio: date, periodo: str) -> tuple[date, date]:
     previo = inicio - timedelta(days=1)
     return previo, previo
 
+def _lugar(isla: object, ubicacion: object) -> str:
+    """Isla y posicion en un solo texto: "ISLA 24 · 4 - D".
+
+    En una isla la columna ubicacion trae solo la fila y el numero ("4 - D"),
+    que sin la isla no dice donde esta el vehiculo. En una zona con nombre
+    ("ZONA DESPACHO VARI") las dos columnas repiten lo mismo y no hay que
+    duplicarlo.
+    """
+    sitio = _texto(ubicacion, "")
+    casa = _texto(isla, "")
+    if not casa or sitio == casa:
+        return sitio or casa or "-"
+    return f"{casa} · {sitio}" if sitio else casa
+
 def _pausas(df: pd.DataFrame) -> dict:
     """Huecos de mas de PAUSA_MINUTOS entre dos movimientos del mismo chofer.
 
@@ -251,8 +265,8 @@ def _pausas(df: pd.DataFrame) -> dict:
             # Cuanto del hueco era almuerzo, para que se entienda por que
             # "de 11:30 a 14:00" aparece como una pausa de 90 minutos.
             "almuerzo_min": int(round(f.almuerzo)),
-            "ultima_ubicacion": _texto(f.previa_ubicacion),
-            "siguiente_ubicacion": _texto(f.ubicacion),
+            "ultima_ubicacion": _lugar(f.previa_isla, f.previa_ubicacion),
+            "siguiente_ubicacion": _lugar(f.isla, f.ubicacion),
         }
         for f in orden.head(PAUSAS_MAX_REGISTRO).itertuples()
     ]
@@ -736,9 +750,7 @@ def flujo_unidad(response: Response, chasis: str):
         etapa = clasificar_etapa(fila.get("isla"), fila.get("ubicacion"))
         lugar = _texto(fila.get("ubicacion"), "")
         isla = _texto(fila.get("isla"), "")
-        # En una isla la ubicacion es la fila y el numero, que sin la isla no
-        # dice nada; en una zona con nombre las dos columnas repiten lo mismo.
-        completo = lugar if lugar == isla or not isla else f"{isla} · {lugar}"
+        completo = _lugar(isla, lugar)
         eventos.append(
             {
                 "fecha": fila["fecha"],
