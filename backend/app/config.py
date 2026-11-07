@@ -112,7 +112,7 @@ CUENTAS_COMPARTIDAS = {
 # Lista vacia = mostrar todos los usuarios que aparezcan en la hoja.
 CHOFERES_FILTRO = _env_lista(
     "CHOFERES_FILTRO",
-    "JFERNANDEZM,CVEGAL,PROTELANDTEMP,HSANTOSV,BRIVASL,VGUZMAN",
+    "JFERNANDEZM,PROTELANDTEMP,HSANTOSV,BRIVASL,VGUZMAN",
 )
 
 # --- Hoja de revisiones de VARI -------------------------------------------
@@ -221,7 +221,7 @@ PAUSA_MINUTOS = _env_int("PAUSA_MINUTOS", 30)
 # PROTELANDTEMP, de 1 a 2.
 #
 # Una cuenta que no este en esta tabla no tiene ningun descuento: si algun
-# dia JFERNANDEZM o CVEGAL vuelven a tener actividad, anadelos aqui o les
+# dia entra otro chofer a CHOFERES_FILTRO, anadelo aqui tambien o le
 # saldra una pausa de una hora cada mediodia.
 ALMUERZOS = {
     "BRIVASL": ("12:00", "13:00"),

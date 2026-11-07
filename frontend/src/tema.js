@@ -14,6 +14,10 @@ import { createTheme } from "@mui/material/styles";
  * ranking, filtrar o cambiar de dia repintaria a todos y nadie podria seguir
  * "su" linea. Validada con el script de paletas en claro y oscuro.
  *
+ * El sexto es violeta y no el verde que traia la paleta de referencia: con
+ * seis lineas juntas en pantalla, ese verde y el aguamarina del tercero se
+ * confundian a simple vista aunque pasaran la prueba de contraste.
+ *
  * Verde y rojo (bueno / malo) estan reservados para estado (subio / bajo) y
  * nunca se usan como color de serie.
  */
@@ -31,7 +35,7 @@ export const VIZ = {
     // Paso de la misma rampa para las barras sin enfasis. No mas claro que
     // este: por debajo deja de distinguirse del fondo.
     serieSuave: "#86b6ef",
-    categoricas: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"],
+    categoricas: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#6250d6"],
     bueno: "#006300",
     malo: "#d03b3b",
   },
@@ -46,7 +50,7 @@ export const VIZ = {
     borde: "rgba(255, 255, 255, 0.10)",
     serie: "#3987e5",
     serieSuave: "#184f95",
-    categoricas: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300"],
+    categoricas: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#9085e9"],
     bueno: "#0ca30c",
     malo: "#e66767",
   },

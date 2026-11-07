@@ -94,45 +94,57 @@ function GraficoComparativa() {
 
   return (
     <Box>
-      {/* Navegacion de semana */}
-      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 1.5 }}>
-        <IconButton size="small" onClick={() => setSemanas((n) => n - 1)}>
-          <ChevronLeftIcon />
-        </IconButton>
-        <Typography
+            {/* Navegacion de semana. Las flechas van pegadas al texto y no en los
+          extremos: separadas, la vista salta de una punta a otra para leer
+          que semana es y volver a pulsar. */}
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
+        <Box
           sx={{
-            fontSize: "0.85rem",
-            color: v.tintaPrincipal,
-            fontWeight: 500,
-            minWidth: esMovil ? 0 : 210,
-            textAlign: "center",
+            display: "flex",
+            alignItems: "center",
+            border: `1px solid ${v.borde}`,
+            borderRadius: 1,
           }}
         >
-          {datos?.es_semana_actual ? "Esta semana" : datos?.etiqueta ?? "…"}
+          <IconButton size="small" onClick={() => setSemanas((n) => n - 1)}>
+            <ChevronLeftIcon fontSize="small" />
+          </IconButton>
+          <Typography
+            sx={{
+              fontSize: "0.8rem",
+              color: v.tintaPrincipal,
+              fontWeight: 500,
+              px: 1,
+              minWidth: esMovil ? 118 : 150,
+              textAlign: "center",
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {datos ? `${datos.desde.slice(8)}/${datos.desde.slice(5, 7)} – ${datos.hasta.slice(8)}/${datos.hasta.slice(5, 7)}` : "…"}
+          </Typography>
+          <IconButton
+            size="small"
+            onClick={() => setSemanas((n) => n + 1)}
+            disabled={!datos?.hay_siguiente}
+          >
+            <ChevronRightIcon fontSize="small" />
+          </IconButton>
+        </Box>
+
+        <Typography sx={{ fontSize: "0.75rem", color: v.tintaSuave }}>
+          {datos?.es_semana_actual ? "Semana en curso" : datos?.etiqueta ?? ""}
         </Typography>
-        <IconButton
-          size="small"
-          onClick={() => setSemanas((n) => n + 1)}
-          disabled={!datos?.hay_siguiente}
-        >
-          <ChevronRightIcon />
-        </IconButton>
+
         {datos && !datos.es_semana_actual && (
           <Chip
             size="small"
             variant="outlined"
-            label="Hoy"
+            label="Volver a hoy"
             onClick={() => setSemanas(0)}
-            sx={{ ml: 0.5, cursor: "pointer" }}
+            sx={{ cursor: "pointer" }}
           />
         )}
       </Box>
-
-      {datos?.es_semana_actual && (
-        <Typography sx={{ fontSize: "0.75rem", color: v.tintaSuave, mb: 1.5, mt: -1 }}>
-          {datos.etiqueta}
-        </Typography>
-      )}
 
       {/* La leyenda es tambien el selector. Lleva el nombre en tinta al lado
           del punto de color: la identidad no puede depender solo del color,
@@ -215,7 +227,7 @@ function GraficoComparativa() {
         <ResponsiveContainer width="100%" height={ALTO}>
           <LineChart
             data={filas}
-            margin={{ top: 8, right: 12, left: esMovil ? -18 : -8, bottom: 0 }}
+            margin={{ top: 12, right: 24, left: esMovil ? -18 : -8, bottom: 0 }}
           >
             <CartesianGrid stroke={v.cuadricula} vertical={false} />
             <XAxis
@@ -229,6 +241,10 @@ function GraficoComparativa() {
               axisLine={false}
               tickLine={false}
               allowDecimals={false}
+              width={36}
+              // Un poco de aire arriba: sin esto la linea mas alta roza el
+              // borde de la tarjeta y parece cortada.
+              domain={[0, (max) => Math.ceil((max * 1.1) / 5) * 5]}
             />
             <Tooltip
               cursor={{ stroke: v.eje, strokeWidth: 1 }}
@@ -237,15 +253,20 @@ function GraficoComparativa() {
             {visibles.map((s) => (
               <Line
                 key={s.usuario}
-                type="monotone"
+                // Recta y no "monotone": la curva suavizada inventa valores
+                // entre dos dias (sube por encima del maximo real y baja por
+                // debajo del minimo) y dibuja una produccion que no existio.
+                type="linear"
                 dataKey={s.usuario}
                 name={s.nombre}
                 stroke={color(s)}
                 strokeWidth={2}
-                // Una semana son como mucho siete puntos: aqui los dots
-                // ayudan a leer y no ensucian.
-                dot={{ r: 3, strokeWidth: 0 }}
-                activeDot={{ r: 5, strokeWidth: 2, stroke: v.superficie }}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                // Sin fill explicito Recharts pinta el punto en blanco, que
+                // sobre la linea de color queda como un agujero.
+                dot={{ r: 3, strokeWidth: 0, fill: color(s) }}
+                activeDot={{ r: 5, strokeWidth: 2, stroke: v.superficie, fill: color(s) }}
               />
             ))}
           </LineChart>
