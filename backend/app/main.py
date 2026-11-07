@@ -187,10 +187,17 @@ def _serie_por_dia(datos: pd.DataFrame, inicio: date, fin: date) -> dict:
         .reindex(dias, fill_value=0)
     )
 
-    # El domingo no se trabaja: dibujarlo siempre mete una caida a cero al
-    # final de cada semana que no significa nada. Se queda solo cuando
-    # alguien marco algo ese dia.
-    dias = [d for d in dias if d.weekday() != 6 or tabla.loc[d].sum() > 0]
+    # Dos dias no se pueden puntuar con un cero: el domingo, porque no es
+    # laborable, y el de hoy mientras nadie haya marcado todavia, porque a
+    # primera hora el cero solo quiere decir que la jornada no ha empezado.
+    # Los dos se caen del grafico si estan vacios, y vuelven en cuanto
+    # alguien marca algo.
+    hoy = _hoy()
+    dias = [
+        d
+        for d in dias
+        if (d.weekday() != 6 and d != hoy) or tabla.loc[d].sum() > 0
+    ]
     if not dias:
         return vacio
     tabla = tabla.loc[dias]
@@ -208,15 +215,14 @@ def _serie_por_dia(datos: pd.DataFrame, inicio: date, fin: date) -> dict:
     series = []
     for usuario in usuarios:
         personas = _personas(usuario)
-        # Un cero entre semana SI se dibuja: el chofer tenia turno y no movio
-        # nada, y eso es justo lo que hay que ver. El domingo es distinto,
-        # porque no es dia laborable: si la columna existe es porque alguien
-        # vino a trabajar, y a los demas no se les puede apuntar un cero por
-        # no haber venido un dia que no les tocaba. Ahi va None y su linea
-        # simplemente no pasa por ese dia.
+        # Un cero en un dia ya cerrado SI se dibuja: el chofer tenia turno y
+        # no movio nada, y eso es justo lo que hay que ver. El domingo y el
+        # dia de hoy son distintos: en el domingo no le tocaba venir, y hoy
+        # todavia le queda jornada por delante. En esos dos va None y su
+        # linea no pasa por ahi en vez de tocar el suelo.
         valores = [
             None
-            if dia.weekday() == 6 and not bruto
+            if (dia.weekday() == 6 or dia == hoy) and not bruto
             else (round(float(bruto) / personas, 1) if personas > 1 else int(bruto))
             for dia, bruto in zip(dias, tabla[usuario])
         ]
