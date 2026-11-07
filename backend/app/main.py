@@ -180,12 +180,20 @@ def _serie_por_dia(datos: pd.DataFrame, inicio: date, fin: date) -> dict:
     if df.empty or not dias:
         return vacio
 
-    tabla = (
+        tabla = (
         df.groupby([df["fecha"].dt.date, "chofer"])
         .size()
         .unstack(fill_value=0)
         .reindex(dias, fill_value=0)
     )
+
+    # El domingo no se trabaja: dibujarlo siempre mete una caida a cero al
+    # final de cada semana que no significa nada. Se queda solo cuando
+    # alguien marco algo ese dia.
+    dias = [d for d in dias if d.weekday() != 6 or tabla.loc[d].sum() > 0]
+    if not dias:
+        return vacio
+    tabla = tabla.loc[dias]
 
     # El indice de color sale de CHOFERES_FILTRO, que no cambia nunca, y no
     # de la lista de presentes: un chofer que no trabajo hoy desaparece de la
@@ -200,12 +208,20 @@ def _serie_por_dia(datos: pd.DataFrame, inicio: date, fin: date) -> dict:
     series = []
     for usuario in usuarios:
         personas = _personas(usuario)
+        # Un cero entre semana SI se dibuja: el chofer tenia turno y no movio
+        # nada, y eso es justo lo que hay que ver. El domingo es distinto,
+        # porque no es dia laborable: si la columna existe es porque alguien
+        # vino a trabajar, y a los demas no se les puede apuntar un cero por
+        # no haber venido un dia que no les tocaba. Ahi va None y su linea
+        # simplemente no pasa por ese dia.
         valores = [
-            round(float(v) / personas, 1) if personas > 1 else int(v)
-            for v in tabla[usuario]
+            None
+            if dia.weekday() == 6 and not bruto
+            else (round(float(bruto) / personas, 1) if personas > 1 else int(bruto))
+            for dia, bruto in zip(dias, tabla[usuario])
         ]
         trabajados = [x for x in valores if x]
-        mejor = max(valores) if valores else 0
+        mejor = max(trabajados) if trabajados else 0
         series.append(
             {
                 "nombre": _nombre(usuario),
@@ -217,9 +233,9 @@ def _serie_por_dia(datos: pd.DataFrame, inicio: date, fin: date) -> dict:
                 # el grafico. El promedio va sobre los dias que trabajo, no
                 # sobre los siete: dividir entre 7 a quien libra el domingo
                 # lo hace parecer mas flojo de lo que fue.
-                "total": round(sum(valores), 1),
+                "total": round(sum(trabajados), 1),
                 "dias_trabajados": len(trabajados),
-                "promedio": round(sum(valores) / len(trabajados), 1)
+                "promedio": round(sum(trabajados) / len(trabajados), 1)
                 if trabajados
                 else 0,
                 "mejor": mejor,

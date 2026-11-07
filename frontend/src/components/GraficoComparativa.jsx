@@ -265,8 +265,14 @@ function GraficoComparativa() {
                 strokeLinejoin="round"
                 // Sin fill explicito Recharts pinta el punto en blanco, que
                 // sobre la linea de color queda como un agujero.
-                dot={{ r: 3, strokeWidth: 0, fill: color(s) }}
+                                dot={{ r: 3.5, strokeWidth: 0, fill: color(s) }}
                 activeDot={{ r: 5, strokeWidth: 2, stroke: v.superficie, fill: color(s) }}
+                // Un dia sin marcar llega como null, no como 0. Sin
+                // connectNulls la linea se corta ahi en vez de cruzar por
+                // encima, que es lo honesto: no se sabe que paso, no es que
+                // produjera algo intermedio. Quien solo trabajo un dia queda
+                // como un punto suelto, que tambien es la verdad.
+                connectNulls={false}
               />
             ))}
           </LineChart>
@@ -274,7 +280,7 @@ function GraficoComparativa() {
       )}
 
       <Typography sx={{ mt: 1, fontSize: "0.7rem", color: v.tintaSuave }}>
-        Movimientos por persona y día, de lunes a domingo. Las cuentas
+        Movimientos por persona y día, de lunes a sábados. Las cuentas
         compartidas van divididas entre sus titulares (marcadas con ÷) para que
         se puedan comparar con las individuales. Toca un nombre para ver solo a
         esa persona, y otra vez para volver a todos.
@@ -312,7 +318,13 @@ function Dato({ etiqueta, valor, nota, v }) {
 function Cajita({ active, payload, label, series, color, v }) {
   if (!active || !payload?.length) return null;
 
-  const porUsuario = new Map(payload.map((p) => [p.dataKey, p.value]));
+    // Los dias sin marcar llegan como null: ese chofer no sale en el tooltip
+  // en vez de salir con un hueco al lado del nombre.
+  const porUsuario = new Map(
+    payload.filter((p) => p.value != null).map((p) => [p.dataKey, p.value])
+  );
+  if (!porUsuario.size) return null;
+
   const lineas = series
     .filter((s) => porUsuario.has(s.usuario))
     .sort((a, b) => porUsuario.get(b.usuario) - porUsuario.get(a.usuario));
