@@ -230,9 +230,35 @@ ALMUERZOS = {
     "PROTELANDTEMP": ("13:00", "14:00"),
 }
 
-# Cuantas pausas se devuelven en el registro detallado, de la mas larga a la
-# mas corta. En un mes pueden ser miles y la respuesta se volveria enorme.
-PAUSAS_MAX_REGISTRO = _env_int("PAUSAS_MAX_REGISTRO", 100)
+
+# Horario de turno. "semana" es de lunes a viernes y "sabado" el sabado; el
+# domingo no se trabaja y no se mide ni entrada ni salida.
+#
+# Sirve para las dos pausas que no estan entre dos movimientos: la de empezar
+# tarde y la de dejar de marcar antes de la hora de salida.
+#
+# VGUZMAN no esta a proposito: es apoyo y no tiene turno fijo, asi que solo
+# se le miden los huecos entre movimientos. Lo mismo para cualquiera que no
+# aparezca aqui.
+HORARIOS = {
+    "BRIVASL": {"semana": ("07:00", "16:30"), "sabado": ("07:00", "12:00")},
+    "HSANTOSV": {"semana": ("07:00", "16:30"), "sabado": ("07:00", "12:00")},
+    "PROTELANDTEMP": {"semana": ("08:00", "17:30"), "sabado": ("08:00", "13:00")},
+}
+
+# Minutos que pueden pasar desde la hora de entrada hasta el primer
+# movimiento antes de contarlo como pausa. Con 30, entrar a las 7:00 y marcar
+# a las 7:30 ya cuenta.
+TOLERANCIA_ENTRADA_MIN = _env_int("TOLERANCIA_ENTRADA_MIN", 30)
+
+# Cuanto antes de la salida se admite el ultimo movimiento. Con 15, marcar a
+# las 16:15 con salida a las 16:30 esta bien; marcar a las 16:03 deja un
+# hueco de 27 minutos y se registra entero, no solo lo que pasa de 15.
+TOLERANCIA_SALIDA_MIN = _env_int("TOLERANCIA_SALIDA_MIN", 15)
+
+# Cuantas pausas se devuelven en el registro detallado. Van en orden
+# cronologico, asi que al recortar se quedan las mas antiguas del periodo.
+PAUSAS_MAX_REGISTRO = _env_int("PAUSAS_MAX_REGISTRO", 300)
 
 # --- CORS -----------------------------------------------------------------
 # Solo necesario si el frontend vive en otro dominio.

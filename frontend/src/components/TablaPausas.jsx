@@ -14,7 +14,14 @@ import {
 
 import { VIZ } from "../tema";
 
-const REGISTRO_INICIAL = 10;
+const REGISTRO_INICIAL = 12;
+
+// Las tres clases de hueco, con el texto que las explica en una palabra.
+const TIPOS = {
+  entrada: { etiqueta: "Entró tarde", color: "aviso" },
+  salida: { etiqueta: "No marcó al salir", color: "aviso" },
+  jornada: null,
+};
 
 /**
  * Pausas: huecos entre dos movimientos del mismo chofer por encima del
@@ -45,6 +52,9 @@ function TablaPausas({ pausas, periodo = "dia" }) {
 
   const numero = { textAlign: "right", fontVariantNumeric: "tabular-nums" };
   const visibles = todas ? registro : registro.slice(0, REGISTRO_INICIAL);
+  const hayTurnos = porChofer.some(
+    (c) => c.entradas_tarde > 0 || c.salidas_sin_marcar > 0
+  );
 
   return (
     <Box>
@@ -57,7 +67,11 @@ function TablaPausas({ pausas, periodo = "dia" }) {
               <TableCell sx={{ ...numero, px: esMovil ? 1 : 2 }}>
                 {esMovil ? "Parado" : "Tiempo parado"}
               </TableCell>
-              {!esMovil && <TableCell sx={numero}>La más larga</TableCell>}
+                            {!esMovil && <TableCell sx={numero}>La más larga</TableCell>}
+              {!esMovil && hayTurnos && <TableCell sx={numero}>Entró tarde</TableCell>}
+              {!esMovil && hayTurnos && (
+                <TableCell sx={numero}>No marcó al salir</TableCell>
+              )}
             </TableRow>
           </TableHead>
           <TableBody>
@@ -82,9 +96,19 @@ function TablaPausas({ pausas, periodo = "dia" }) {
                 <TableCell sx={{ ...numero, px: esMovil ? 1 : 2 }}>
                   {fila.tiempo}
                 </TableCell>
-                {!esMovil && (
+                                {!esMovil && (
                   <TableCell sx={{ ...numero, color: v.tintaSecundaria }}>
                     {fila.mas_larga}
+                  </TableCell>
+                )}
+                {!esMovil && hayTurnos && (
+                  <TableCell sx={{ ...numero, color: v.tintaSecundaria }}>
+                    {fila.entradas_tarde || "–"}
+                  </TableCell>
+                )}
+                {!esMovil && hayTurnos && (
+                  <TableCell sx={{ ...numero, color: v.tintaSecundaria }}>
+                    {fila.salidas_sin_marcar || "–"}
                   </TableCell>
                 )}
               </TableRow>
@@ -129,7 +153,14 @@ function TablaPausas({ pausas, periodo = "dia" }) {
                     color: v.tintaSecundaria,
                   }}
                 >
-                  {p.desde} – {p.hasta}
+                                    {p.desde} – {p.hasta}
+                  {TIPOS[p.tipo] && (
+                    <Typography
+                      sx={{ fontSize: "0.65rem", color: theme.palette.warning.main }}
+                    >
+                      {TIPOS[p.tipo].etiqueta}
+                    </Typography>
+                  )}
                 </TableCell>
                                 <TableCell sx={{ ...numero, fontWeight: 600, px: esMovil ? 1 : 2 }}>
                   {p.duracion}
@@ -154,16 +185,16 @@ function TablaPausas({ pausas, periodo = "dia" }) {
 
       {registro.length > REGISTRO_INICIAL && (
         <Button size="small" onClick={() => setTodas((x) => !x)} sx={{ mt: 1 }}>
-          {todas
-            ? "Ver solo las 10 más largas"
+                    {todas
+            ? `Ver solo las primeras ${REGISTRO_INICIAL}`
             : `Ver las ${registro.length} pausas`}
         </Button>
       )}
 
       <Typography sx={{ mt: 1, fontSize: "0.7rem", color: v.tintaSuave }}>
         Solo se miden huecos dentro de un mismo día, entre un movimiento y el
-        siguiente. No se cuenta el tiempo antes del primer movimiento ni
-        después del último.
+        siguiente. Se cuenta el tiempo desde la hora de ingreso y el primer movimiento, el último movimiento
+        debe ser dentro de los últimos 15 minutos de su horario laboral.
         {pausas?.truncado && " Se muestran las más largas del periodo."}
       </Typography>
     </Box>

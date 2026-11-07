@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import (
     ALMACEN,
     ALMUERZOS,
+    HORARIOS,
     CDN_CACHE_SEGUNDOS,
     CDN_STALE_SEGUNDOS,
     CHOFERES_FILTRO,
@@ -20,6 +21,8 @@ from app.config import (
     HORA_INICIO,
     PAUSA_MINUTOS,
     PAUSAS_MAX_REGISTRO,
+    TOLERANCIA_ENTRADA_MIN,
+    TOLERANCIA_SALIDA_MIN,
     USAR_CONSULTA_FILTRADA,
     ZONA_HORARIA,
 )
@@ -246,16 +249,61 @@ def _lugar(isla: object, ubicacion: object) -> str:
         return sitio or casa or "-"
     return f"{casa} · {sitio}" if sitio else casa
 
-def _pausas(df: pd.DataFrame) -> dict:
-    """Huecos de mas de PAUSA_MINUTOS entre dos movimientos del mismo chofer.
+def _turno(usuario: str, dia: date) -> tuple[datetime, datetime] | None:
+    """Hora de entrada y de salida de ese chofer ese dia, o None.
 
-    Solo cuenta huecos DENTRO de un mismo dia: entre la ultima marca de un dia
-    y la primera del siguiente hay toda la noche, y eso no es una pausa de
-    nadie. Tampoco se mide antes del primer movimiento ni despues del ultimo,
-    porque la hoja no dice a que hora empieza ni termina el turno.
+    None significa "sin turno que medir": el domingo, o un usuario que no
+    esta en HORARIOS porque es apoyo y entra cuando hace falta.
+    """
+    horario = HORARIOS.get(usuario)
+    if not horario:
+        return None
+
+    clave = "sabado" if dia.weekday() == 5 else "semana" if dia.weekday() < 5 else None
+    franja = horario.get(clave) if clave else None
+    if not franja:
+        return None
+
+    return (
+        datetime.combine(dia, time.fromisoformat(franja[0])),
+        datetime.combine(dia, time.fromisoformat(franja[1])),
+    )
+
+
+def _solape_almuerzo(usuario: str, desde: datetime, hasta: datetime) -> float:
+    """Minutos del hueco que caen dentro de la hora de almuerzo."""
+    franja = ALMUERZOS.get(usuario)
+    if not franja:
+        return 0.0
+
+    dia = desde.date()
+    inicio = datetime.combine(dia, time.fromisoformat(franja[0]))
+    fin = datetime.combine(dia, time.fromisoformat(franja[1]))
+    solape = (min(hasta, fin) - max(desde, inicio)).total_seconds() / 60
+    return max(0.0, solape)
+
+
+def _pausas(df: pd.DataFrame) -> dict:
+    """Tiempo que un chofer pasa sin mover ninguna unidad.
+
+    Hay tres clases de hueco y cada una tiene su propia regla:
+
+    - "entrada": desde la hora de entrada hasta el primer movimiento. Pasa a
+      ser pausa a partir de TOLERANCIA_ENTRADA_MIN minutos.
+    - "jornada": entre dos movimientos seguidos. Pasa a ser pausa a partir de
+      PAUSA_MINUTOS.
+    - "salida": desde el ultimo movimiento hasta la hora de salida. Aqui la
+      regla es al reves: hay que haber marcado dentro de los ultimos
+      TOLERANCIA_SALIDA_MIN minutos. Si el ultimo movimiento fue antes, el
+      hueco cuenta ENTERO, no solo lo que pasa de ese margen.
+
+    De los tres se descuenta el almuerzo, y los tres se miden solo dentro de
+    un mismo dia: entre la ultima marca de un dia y la primera del siguiente
+    hay toda la noche, y eso no es una pausa de nadie.
     """
     vacio = {
         "umbral_minutos": PAUSA_MINUTOS,
+        "margen_salida_minutos": TOLERANCIA_SALIDA_MIN,
         "total": 0,
         "por_chofer": [],
         "registro": [],
@@ -264,95 +312,117 @@ def _pausas(df: pd.DataFrame) -> dict:
     if df.empty:
         return vacio
 
-    d = df[["chofer", "fecha"]].copy()
+    columnas = ["chofer", "fecha"] + [c for c in ("isla", "ubicacion") if c in df.columns]
+    d = df[columnas].copy()
     for columna in ("isla", "ubicacion"):
-        d[columna] = df[columna] if columna in df.columns else ""
+        if columna not in d.columns:
+            d[columna] = ""
     d["dia"] = d["fecha"].dt.date
-    d = d.sort_values(["chofer", "dia", "fecha"], kind="stable")
 
-    grupo = d.groupby(["chofer", "dia"], sort=False)
-    d["previa"] = grupo["fecha"].shift()
-    d["previa_isla"] = grupo["isla"].shift()
-    d["previa_ubicacion"] = grupo["ubicacion"].shift()
-    d["bruto"] = (d["fecha"] - d["previa"]).dt.total_seconds() / 60
+    huecos: list[dict] = []
 
-    # --- Descontar el almuerzo ---
-    # Se resta solo la parte del hueco que cae dentro de la franja, no el
-    # hueco entero: un paron de 11:30 a 14:00 sigue siendo una pausa de 90
-    # minutos, no desaparece por haber tocado la hora de comer.
-    dia_texto = d["dia"].astype(str)
-    alm_ini = pd.to_datetime(
-        dia_texto + " " + d["chofer"].map(lambda c: ALMUERZOS.get(c, (None,))[0]),
-        errors="coerce",
-    )
-    alm_fin = pd.to_datetime(
-        dia_texto
-        + " "
-        + d["chofer"].map(lambda c: (ALMUERZOS.get(c) or (None, None))[1]),
-        errors="coerce",
-    )
+    def anotar(chofer, dia, desde, hasta, tipo, origen, destino):
+        bruto = (hasta - desde).total_seconds() / 60
+        almuerzo = _solape_almuerzo(chofer, desde, hasta)
+        minutos = max(0.0, bruto - almuerzo)
+        huecos.append(
+            {
+                "usuario": chofer,
+                "nombre": _nombre(chofer),
+                "dia": dia,
+                "orden": desde,
+                "desde": desde.strftime("%H:%M"),
+                "hasta": hasta.strftime("%H:%M"),
+                "minutos": int(round(minutos)),
+                "duracion": _duracion(minutos * 60),
+                "almuerzo_min": int(round(almuerzo)),
+                "tipo": tipo,
+                "ultima_ubicacion": origen,
+                "siguiente_ubicacion": destino,
+            }
+        )
 
-    # Con NaT (cuenta sin almuerzo configurado) las comparaciones de pandas
-    # ignorarian el valor ausente y el solape saldria igual al hueco entero,
-    # borrando todas las pausas de esa cuenta. Por eso se enmascara aparte.
-    tiene_almuerzo = alm_ini.notna() & alm_fin.notna()
-    fin_solape = pd.concat([d["fecha"], alm_fin], axis=1).min(axis=1)
-    ini_solape = pd.concat([d["previa"], alm_ini], axis=1).max(axis=1)
-    solape = (fin_solape - ini_solape).dt.total_seconds().div(60)
-    d["almuerzo"] = solape.where(tiene_almuerzo).clip(lower=0).fillna(0)
+    for (chofer, dia), grupo in d.groupby(["chofer", "dia"], sort=True):
+        grupo = grupo.sort_values("fecha", kind="stable")
+        filas = list(grupo.itertuples())
+        turno = _turno(chofer, dia)
 
-    d["minutos"] = (d["bruto"] - d["almuerzo"]).clip(lower=0)
+        # Empezar tarde
+        if turno:
+            primera = filas[0]
+            bruto = (primera.fecha - turno[0]).total_seconds() / 60
+            if bruto >= TOLERANCIA_ENTRADA_MIN:
+                anotar(chofer, dia, turno[0], primera.fecha, "entrada",
+                       "Entrada del turno", _lugar(primera.isla, primera.ubicacion))
 
-    huecos = d[d["bruto"].notna() & (d["minutos"] >= PAUSA_MINUTOS)].copy()
-    if huecos.empty:
+        # Huecos entre movimientos
+        for previa, actual in zip(filas, filas[1:]):
+            bruto = (actual.fecha - previa.fecha).total_seconds() / 60
+            if bruto >= PAUSA_MINUTOS:
+                anotar(chofer, dia, previa.fecha, actual.fecha, "jornada",
+                       _lugar(previa.isla, previa.ubicacion),
+                       _lugar(actual.isla, actual.ubicacion))
+
+        # Dejar de marcar antes de la hora de salida
+        if turno:
+            ultima = filas[-1]
+            bruto = (turno[1] - ultima.fecha).total_seconds() / 60
+            if bruto > TOLERANCIA_SALIDA_MIN:
+                anotar(chofer, dia, ultima.fecha, turno[1], "salida",
+                       _lugar(ultima.isla, ultima.ubicacion), "Salida del turno")
+
+    # Un hueco que el almuerzo deja por debajo del umbral deja de ser pausa.
+    huecos = [h for h in huecos if h["minutos"] >= (
+        1 if h["tipo"] == "salida" else PAUSA_MINUTOS
+    )]
+
+    if not huecos:
         return vacio
 
-    resumen_chofer = (
-        huecos.groupby("chofer")
-        .agg(pausas=("minutos", "size"), minutos=("minutos", "sum"),
-             mas_larga=("minutos", "max"))
-        .reset_index()
-        .sort_values("minutos", ascending=False)
+    por_chofer = {}
+    for h in huecos:
+        acumulado = por_chofer.setdefault(
+            h["usuario"],
+            {
+                "nombre": h["nombre"],
+                "usuario": h["usuario"],
+                "personas": _personas(h["usuario"]),
+                "pausas": 0,
+                "minutos": 0,
+                "mas_larga_min": 0,
+                "entradas_tarde": 0,
+                "salidas_sin_marcar": 0,
+            },
+        )
+        acumulado["pausas"] += 1
+        acumulado["minutos"] += h["minutos"]
+        acumulado["mas_larga_min"] = max(acumulado["mas_larga_min"], h["minutos"])
+        if h["tipo"] == "entrada":
+            acumulado["entradas_tarde"] += 1
+        elif h["tipo"] == "salida":
+            acumulado["salidas_sin_marcar"] += 1
+
+    resumen_chofer = sorted(
+        por_chofer.values(), key=lambda c: c["minutos"], reverse=True
     )
+    for c in resumen_chofer:
+        c["tiempo"] = _duracion(c["minutos"] * 60)
+        c["mas_larga"] = _duracion(c.pop("mas_larga_min") * 60)
 
-    por_chofer = [
-        {
-            "nombre": _nombre(f.chofer),
-            "usuario": f.chofer,
-            "personas": _personas(f.chofer),
-            "pausas": int(f.pausas),
-            "minutos": int(round(f.minutos)),
-            "tiempo": _duracion(f.minutos * 60),
-            "mas_larga": _duracion(f.mas_larga * 60),
-        }
-        for f in resumen_chofer.itertuples()
-    ]
-
-    # De la mas larga a la mas corta: en un mes hay cientos y lo que interesa
-    # son las gordas, no leerlas todas en orden cronologico.
-    orden = huecos.sort_values("minutos", ascending=False)
+    # Orden cronologico: el registro se lee como la jornada, de la primera
+    # pausa del periodo a la ultima.
+    huecos.sort(key=lambda h: h["orden"])
     registro = [
-        {
-            "nombre": _nombre(f.chofer),
-            "usuario": f.chofer,
-            "dia": f.dia.strftime("%d/%m/%Y"),
-            "desde": f.previa.strftime("%H:%M"),
-            "hasta": f.fecha.strftime("%H:%M"),
-            "minutos": int(round(f.minutos)),
-            "duracion": _duracion(f.minutos * 60),
-            # Cuanto del hueco era almuerzo, para que se entienda por que
-            # "de 11:30 a 14:00" aparece como una pausa de 90 minutos.
-            "almuerzo_min": int(round(f.almuerzo)),
-            "ultima_ubicacion": _lugar(f.previa_isla, f.previa_ubicacion),
-            "siguiente_ubicacion": _lugar(f.isla, f.ubicacion),
-        }
-        for f in orden.head(PAUSAS_MAX_REGISTRO).itertuples()
+        {**{k: v for k, v in h.items() if k != "orden"},
+         "dia": h["dia"].strftime("%d/%m/%Y")}
+        for h in huecos[:PAUSAS_MAX_REGISTRO]
     ]
 
     return {
         "umbral_minutos": PAUSA_MINUTOS,
-        "total": int(len(huecos)),
-        "por_chofer": por_chofer,
+        "margen_salida_minutos": TOLERANCIA_SALIDA_MIN,
+        "total": len(huecos),
+        "por_chofer": resumen_chofer,
         "registro": registro,
         "truncado": len(huecos) > PAUSAS_MAX_REGISTRO,
     }
