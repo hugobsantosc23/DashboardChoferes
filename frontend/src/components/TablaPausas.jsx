@@ -52,9 +52,6 @@ function TablaPausas({ pausas, periodo = "dia" }) {
 
   const numero = { textAlign: "right", fontVariantNumeric: "tabular-nums" };
   const visibles = todas ? registro : registro.slice(0, REGISTRO_INICIAL);
-  const hayTurnos = porChofer.some(
-    (c) => c.entradas_tarde > 0 || c.salidas_sin_marcar > 0
-  );
 
   return (
     <Box>
@@ -67,11 +64,7 @@ function TablaPausas({ pausas, periodo = "dia" }) {
               <TableCell sx={{ ...numero, px: esMovil ? 1 : 2 }}>
                 {esMovil ? "Parado" : "Tiempo parado"}
               </TableCell>
-                            {!esMovil && <TableCell sx={numero}>La más larga</TableCell>}
-              {!esMovil && hayTurnos && <TableCell sx={numero}>Entró tarde</TableCell>}
-              {!esMovil && hayTurnos && (
-                <TableCell sx={numero}>No marcó al salir</TableCell>
-              )}
+                {!esMovil && <TableCell sx={numero}>La más larga</TableCell>}
             </TableRow>
           </TableHead>
           <TableBody>
@@ -101,17 +94,7 @@ function TablaPausas({ pausas, periodo = "dia" }) {
                     {fila.mas_larga}
                   </TableCell>
                 )}
-                {!esMovil && hayTurnos && (
-                  <TableCell sx={{ ...numero, color: v.tintaSecundaria }}>
-                    {fila.entradas_tarde || "–"}
-                  </TableCell>
-                )}
-                {!esMovil && hayTurnos && (
-                  <TableCell sx={{ ...numero, color: v.tintaSecundaria }}>
-                    {fila.salidas_sin_marcar || "–"}
-                  </TableCell>
-                )}
-              </TableRow>
+                </TableRow>
             ))}
           </TableBody>
         </Table>
