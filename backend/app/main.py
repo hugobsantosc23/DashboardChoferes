@@ -180,7 +180,7 @@ def _serie_por_dia(datos: pd.DataFrame, inicio: date, fin: date) -> dict:
     if df.empty or not dias:
         return vacio
 
-        tabla = (
+    tabla = (
         df.groupby([df["fecha"].dt.date, "chofer"])
         .size()
         .unstack(fill_value=0)
