@@ -18,7 +18,7 @@ const REGISTRO_INICIAL = 12;
 
 // Las tres clases de hueco, con el texto que las explica en una palabra.
 const TIPOS = {
-  entrada: { etiqueta: "Entró tarde", color: "aviso" },
+  entrada: { etiqueta: "Empezó tarde", color: "aviso" },
   salida: { etiqueta: "No marcó al salir", color: "aviso" },
   jornada: null,
 };
