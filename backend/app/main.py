@@ -341,6 +341,10 @@ def _pausas(df: pd.DataFrame) -> dict:
             d[columna] = ""
     d["dia"] = d["fecha"].dt.date
 
+        # La jornada de hoy todavia no ha terminado, asi que la hora de salida
+    # aun no ha llegado para nadie.
+    ahora = datetime.now(TZ).replace(tzinfo=None)
+
     huecos: list[dict] = []
 
     def anotar(chofer, dia, desde, hasta, tipo, origen, destino):
@@ -385,8 +389,10 @@ def _pausas(df: pd.DataFrame) -> dict:
                        _lugar(previa.isla, previa.ubicacion),
                        _lugar(actual.isla, actual.ubicacion))
 
-        # Dejar de marcar antes de la hora de salida
-        if turno:
+        # Dejar de marcar antes de la hora de salida. Solo cuando esa hora ya
+        # paso: a media manana no se le puede reprochar a nadie no haber
+        # marcado a las cuatro y media de la tarde.
+        if turno and turno[1] <= ahora:
             ultima = filas[-1]
             bruto = (turno[1] - ultima.fecha).total_seconds() / 60
             if bruto > TOLERANCIA_SALIDA_MIN:
